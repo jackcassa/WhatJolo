@@ -1,8 +1,11 @@
 /.vs/
 /bin/
 /obj/
+Tools/**/bin/
+Tools/**/obj/
 *.user
 db.instance.json
+pg_import.sql
 Captures/
 Projects/
 */dataset/

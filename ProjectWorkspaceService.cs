@@ -5,8 +5,6 @@ namespace WhatJolo;
 
 internal sealed class ProjectWorkspaceService
 {
-    private readonly string _connectionString;
-
     public string ProjectsRootPath { get; }
     public string YoloProjectsRootPath { get; }
 
@@ -14,11 +12,7 @@ internal sealed class ProjectWorkspaceService
     {
         ProjectsRootPath = Path.Combine(SharedDatabase.GetProjectDirectoryPath(), "Projects");
         YoloProjectsRootPath = SharedDatabase.GetProjectDirectoryPath();
-        _connectionString = SharedDatabase.GetConnectionString();
-        SharedDatabase.EnsureDatabaseReady();
         Directory.CreateDirectory(ProjectsRootPath);
-        EnsureProjectActiveClassTable();
-        EnsureProjectInfoTable();
     }
 
     public IReadOnlyList<string> GetProjectNames()
@@ -40,7 +34,13 @@ internal sealed class ProjectWorkspaceService
         Directory.CreateDirectory(projectPath);
         Directory.CreateDirectory(Path.Combine(projectPath, "Captures"));
         Directory.CreateDirectory(Path.Combine(projectPath, "SavedCrops"));
-        UpsertProjectInfo(normalizedName, projectPath);
+        if (SharedDatabase.IsDatabaseConnected())
+        {
+            SharedDatabase.EnsureDatabaseReady();
+            EnsureProjectActiveClassTable();
+            EnsureProjectInfoTable();
+            UpsertProjectInfo(normalizedName, projectPath);
+        }
         return normalizedName;
     }
 
@@ -198,6 +198,11 @@ internal sealed class ProjectWorkspaceService
             return Array.Empty<string>();
         }
 
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            return safeAvailableClasses;
+        }
+
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var command = connection.CreateCommand();
@@ -229,6 +234,11 @@ internal sealed class ProjectWorkspaceService
     public void SaveActiveClasses(string projectName, IEnumerable<string> activeClasses)
     {
         var normalizedProjectName = EnsureProject(projectName);
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            return;
+        }
+
         var distinctClasses = activeClasses
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Select(static name => name.Trim().ToLowerInvariant())
@@ -257,12 +267,14 @@ internal sealed class ProjectWorkspaceService
                 (
                     ProjectName,
                     ClassName,
+                    CreatedAtUtc,
                     UpdatedAtUtc
                 )
                 VALUES
                 (
                     @ProjectName,
                     @ClassName,
+                    CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 );
                 """;
@@ -306,35 +318,21 @@ internal sealed class ProjectWorkspaceService
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = SharedDatabase.IsPostgresConfigured()
-            ? """
-              CREATE TABLE IF NOT EXISTS ProjectActiveClass
-              (
-                  Id BIGSERIAL PRIMARY KEY,
-                  ProjectName TEXT NOT NULL,
-                  ClassName TEXT NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName, ClassName)
-              );
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS ProjectActiveClass
+            (
+                Id BIGSERIAL PRIMARY KEY,
+                ProjectName TEXT NOT NULL,
+                ClassName TEXT NOT NULL,
+                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ProjectName, ClassName)
+            );
 
-              CREATE INDEX IF NOT EXISTS IX_ProjectActiveClass_ProjectName
-                  ON ProjectActiveClass(ProjectName, ClassName);
-              """
-            : """
-              CREATE TABLE IF NOT EXISTS ProjectActiveClass
-              (
-                  Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  ProjectName TEXT NOT NULL,
-                  ClassName TEXT NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName, ClassName)
-              );
-
-              CREATE INDEX IF NOT EXISTS IX_ProjectActiveClass_ProjectName
-                  ON ProjectActiveClass(ProjectName, ClassName);
-              """;
+            CREATE INDEX IF NOT EXISTS IX_ProjectActiveClass_ProjectName
+                ON ProjectActiveClass(ProjectName, ClassName);
+            """;
         command.ExecuteNonQuery();
     }
 
@@ -343,37 +341,22 @@ internal sealed class ProjectWorkspaceService
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = SharedDatabase.IsPostgresConfigured()
-            ? """
-              CREATE TABLE IF NOT EXISTS ProjectInfo
-              (
-                  Id BIGSERIAL PRIMARY KEY,
-                  ProjectName TEXT NOT NULL,
-                  ProjectRootPath TEXT NOT NULL,
-                  MachineName TEXT NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName)
-              );
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS ProjectInfo
+            (
+                Id BIGSERIAL PRIMARY KEY,
+                ProjectName TEXT NOT NULL,
+                ProjectRootPath TEXT NOT NULL,
+                MachineName TEXT NOT NULL,
+                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ProjectName)
+            );
 
-              CREATE INDEX IF NOT EXISTS IX_ProjectInfo_ProjectName
-                  ON ProjectInfo(ProjectName);
-              """
-            : """
-              CREATE TABLE IF NOT EXISTS ProjectInfo
-              (
-                  Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  ProjectName TEXT NOT NULL,
-                  ProjectRootPath TEXT NOT NULL,
-                  MachineName TEXT NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName)
-              );
-
-              CREATE INDEX IF NOT EXISTS IX_ProjectInfo_ProjectName
-                  ON ProjectInfo(ProjectName);
-              """;
+            CREATE INDEX IF NOT EXISTS IX_ProjectInfo_ProjectName
+                ON ProjectInfo(ProjectName);
+            """;
         command.ExecuteNonQuery();
     }
 
@@ -389,6 +372,7 @@ internal sealed class ProjectWorkspaceService
                 ProjectName,
                 ProjectRootPath,
                 MachineName,
+                CreatedAtUtc,
                 UpdatedAtUtc
             )
             VALUES
@@ -396,6 +380,7 @@ internal sealed class ProjectWorkspaceService
                 @ProjectName,
                 @ProjectRootPath,
                 @MachineName,
+                CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT(ProjectName) DO UPDATE SET

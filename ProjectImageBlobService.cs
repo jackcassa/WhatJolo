@@ -15,9 +15,7 @@ internal sealed class ProjectImageBlobService
     {
         _annotationCropDbService = new AnnotationCropDbService();
         _workspaceService = new ProjectWorkspaceService();
-        _storageRootPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(SharedDatabase.GetSqliteDatabasePath())!, ".."));
-        SharedDatabase.EnsureDatabaseReady();
-        EnsureTable();
+        _storageRootPath = SharedDatabase.GetProjectDirectoryPath();
     }
 
     public async Task SaveImageAsync(string projectName, string imagePath, string imageKind)
@@ -26,6 +24,8 @@ internal sealed class ProjectImageBlobService
         {
             return;
         }
+
+        EnsureTable();
 
         var fullPath = Path.GetFullPath(imagePath);
         var originalBytes = await File.ReadAllBytesAsync(fullPath);
@@ -45,6 +45,7 @@ internal sealed class ProjectImageBlobService
                 ContentHash,
                 ByteLength,
                 CompressedBytes,
+                CreatedAtUtc,
                 UpdatedAtUtc
             )
             VALUES
@@ -55,6 +56,7 @@ internal sealed class ProjectImageBlobService
                 @ContentHash,
                 @ByteLength,
                 @CompressedBytes,
+                CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT(ProjectName, ImagePath) DO UPDATE SET
@@ -80,6 +82,8 @@ internal sealed class ProjectImageBlobService
             return;
         }
 
+        EnsureTable();
+
         await using var connection = SharedDatabase.CreateConnection();
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
@@ -96,6 +100,7 @@ internal sealed class ProjectImageBlobService
 
     public async Task<int> SyncProjectAsync(string projectName)
     {
+        EnsureTable();
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
         var expectedImages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -165,6 +170,7 @@ internal sealed class ProjectImageBlobService
 
     public async Task<ProjectRestoreResult> RestoreProjectAsync(string projectName)
     {
+        EnsureTable();
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
         Directory.CreateDirectory(_workspaceService.GetYoloProjectPath(normalizedProjectName));
 
@@ -208,46 +214,33 @@ internal sealed class ProjectImageBlobService
 
     private void EnsureTable()
     {
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            return;
+        }
+
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = SharedDatabase.IsPostgresConfigured()
-            ? """
-              CREATE TABLE IF NOT EXISTS ProjectImageBlob
-              (
-                  Id BIGSERIAL PRIMARY KEY,
-                  ProjectName TEXT NOT NULL,
-                  ImagePath TEXT NOT NULL,
-                  ImageKind TEXT NOT NULL,
-                  ContentHash TEXT NOT NULL,
-                  ByteLength INTEGER NOT NULL,
-                  CompressedBytes BYTEA NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName, ImagePath)
-              );
+        command.CommandText =
+            """
+            CREATE TABLE IF NOT EXISTS ProjectImageBlob
+            (
+                Id BIGSERIAL PRIMARY KEY,
+                ProjectName TEXT NOT NULL,
+                ImagePath TEXT NOT NULL,
+                ImageKind TEXT NOT NULL,
+                ContentHash TEXT NOT NULL,
+                ByteLength INTEGER NOT NULL,
+                CompressedBytes BYTEA NOT NULL,
+                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ProjectName, ImagePath)
+            );
 
-              CREATE INDEX IF NOT EXISTS IX_ProjectImageBlob_ProjectName
-                  ON ProjectImageBlob(ProjectName, ImageKind, UpdatedAtUtc DESC);
-              """
-            : """
-              CREATE TABLE IF NOT EXISTS ProjectImageBlob
-              (
-                  Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  ProjectName TEXT NOT NULL,
-                  ImagePath TEXT NOT NULL,
-                  ImageKind TEXT NOT NULL,
-                  ContentHash TEXT NOT NULL,
-                  ByteLength INTEGER NOT NULL,
-                  CompressedBytes BLOB NOT NULL,
-                  CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                  UNIQUE(ProjectName, ImagePath)
-              );
-
-              CREATE INDEX IF NOT EXISTS IX_ProjectImageBlob_ProjectName
-                  ON ProjectImageBlob(ProjectName, ImageKind, UpdatedAtUtc DESC);
-              """;
+            CREATE INDEX IF NOT EXISTS IX_ProjectImageBlob_ProjectName
+                ON ProjectImageBlob(ProjectName, ImageKind, UpdatedAtUtc DESC);
+            """;
         command.ExecuteNonQuery();
     }
 

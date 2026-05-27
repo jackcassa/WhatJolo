@@ -215,25 +215,30 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         return _workspaceService.GetCapturesPath(CurrentProjectName);
     }
 
-    public void LoadSavedCrops(string cropClass)
+    public async Task LoadSavedCropsAsync(string cropClass)
     {
         SavedCrops.Clear();
         VariationCrops.Clear();
 
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            SelectedSavedCrop = null;
+            SelectedVariationCrop = null;
+            OnPropertyChanged(nameof(SavedCropCount));
+            OnPropertyChanged(nameof(VariationCropCount));
+            return;
+        }
+
         var safeClass = string.IsNullOrWhiteSpace(cropClass) ? "crop" : cropClass.Trim().ToLowerInvariant();
-        var normalRecords = _annotationCropDbService
-            .GetProjectCropsByLabelAsync(CurrentProjectName, safeClass, isVariation: false)
-            .GetAwaiter()
-            .GetResult();
+        var normalRecords = await _annotationCropDbService
+            .GetProjectCropsByLabelAsync(CurrentProjectName, safeClass, isVariation: false);
         foreach (var record in normalRecords.Where(record => File.Exists(record.CropImagePath)))
         {
             SavedCrops.Add(CreateSavedCropItem(record));
         }
 
-        var variationRecords = _annotationCropDbService
-            .GetProjectCropsByLabelAsync(CurrentProjectName, safeClass, isVariation: true)
-            .GetAwaiter()
-            .GetResult();
+        var variationRecords = await _annotationCropDbService
+            .GetProjectCropsByLabelAsync(CurrentProjectName, safeClass, isVariation: true);
         foreach (var record in variationRecords.Where(record => File.Exists(record.CropImagePath)))
         {
             VariationCrops.Add(CreateSavedCropItem(record));
@@ -283,7 +288,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
             CreateBitmapImage(File.ReadAllBytes(outputPath)),
             IsVariation: false);
 
-        LoadSavedCrops(safeClass);
+        await LoadSavedCropsAsync(safeClass);
         SelectedSavedCrop = SavedCrops.FirstOrDefault(item => string.Equals(item.FilePath, outputPath, StringComparison.OrdinalIgnoreCase)) ?? savedItem;
         SelectedVariationCrop = VariationCrops.FirstOrDefault();
         AdbStatusText = $"[{CurrentProjectName}] Crop salvato: {outputPath} | Classe YOLO: {safeClass} | Totale classe {safeClass}: {SavedCropCount}";
@@ -310,7 +315,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath);
         await AlignCurrentProjectAsync("delete-crop");
 
-        LoadSavedCrops(safeClass);
+        await LoadSavedCropsAsync(safeClass);
         AdbStatusText = $"[{CurrentProjectName}] Crop eliminata: {item.FileName}";
         return true;
     }
@@ -335,7 +340,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath);
         await AlignCurrentProjectAsync("delete-variation");
 
-        LoadSavedCrops(safeClass);
+        await LoadSavedCropsAsync(safeClass);
         AdbStatusText = $"[{CurrentProjectName}] Variazione eliminata: {item.FileName}";
         return true;
     }
@@ -358,7 +363,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
 
         var createdCropPaths = await _cropVariationService.GenerateVariationsAsync(sourceRecord, count);
         await AlignCurrentProjectAsync("variation");
-        LoadSavedCrops(string.IsNullOrWhiteSpace(cropClass) ? sourceRecord.LabelName : cropClass);
+        await LoadSavedCropsAsync(string.IsNullOrWhiteSpace(cropClass) ? sourceRecord.LabelName : cropClass);
         SelectedVariationCrop = createdCropPaths.Count > 0
             ? VariationCrops.FirstOrDefault(item => string.Equals(item.FilePath, createdCropPaths[0], StringComparison.OrdinalIgnoreCase))
             : VariationCrops.FirstOrDefault();
@@ -381,11 +386,11 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         AdbStatusText = message;
     }
 
-    public void SetCurrentProject(string projectName, string cropClass)
+    public async Task SetCurrentProjectAsync(string projectName, string cropClass)
     {
         CurrentProjectName = _workspaceService.EnsureProject(projectName);
         LastCapturePath = "Nessuna cattura eseguita.";
-        LoadSavedCrops(cropClass);
+        await LoadSavedCropsAsync(cropClass);
         StatusLog.Clear();
         AdbStatusText = $"Progetto corrente: {CurrentProjectName}";
     }

@@ -1,122 +1,88 @@
-WhatJolo - step eseguiti
+WhatJolo - stato attuale
 ========================
 
-1. Creato il nuovo progetto WhatJolo dentro:
-   C:\Users\jack\Documents\Playground\HID\WhatJolo
+1. Progetto standalone
+   - repository dedicato WhatJolo
+   - solution dedicata WhatJolo.slnx
+   - applicazione WPF .NET 8
 
-2. Convertito il progetto in WPF:
-   - WhatJolo.csproj con UseWPF=true
-   - App.xaml / App.xaml.cs
-   - MainWindow.xaml / MainWindow.xaml.cs
+2. Backend database
+   - backend unico PostgreSQL
+   - nessun fallback SQLite
+   - nessuna dipendenza operativa da file DB locale
+   - tab "Istanza DB" come prima tab
+   - connessione esplicita tramite bottone "Connetti"
+   - altre tab disabilitate finche' il DB non e' connesso
 
-3. Collegato WhatJolo al DB esistente di ScrcpyKeyboardClient:
-   - C:\Users\jack\Documents\Playground\HID\ScrcpyKeyboardClient\AnnotationTemplates\annotations.sqlite3
+3. Configurazione istanza DB
+   - host/porta/database/utente/password salvabili
+   - test connessione dedicato
+   - stato connessione mostrato in UI
+   - inizializzazione con dati locali della macchina corrente
 
-4. Aggiunto SharedDatabase.cs:
-   - path root progetto
-   - path DB condiviso
-   - connection string SQLite
+4. Struttura progetto
+   - gestione progetti multipli
+   - classi YOLO attive per progetto
+   - metadata progetto nel DB:
+     - ProjectRootPath
+     - MachineName
 
-5. Creata la shell iniziale WPF:
-   - titolo WhatJolo
-   - tab Database
-   - lettura tabelle SQLite dal DB condiviso
+5. Acquisizione ADB
+   - start-server
+   - refresh device
+   - screencap PNG lossless
+   - finestra preview floating dedicata
+   - selezione crop fatta dalla finestra floating
 
-6. Aggiunta la tab "Acquisizione ADB"
-   - area info cattura
-   - area preview immagine
-   - stato acquisizione
+6. Crop e annotazioni
+   - salvataggio crop per classe
+   - registrazione nel DB del progetto corrente
+   - supporto variazioni crop
+   - flag IsVariation per distinguere le variazioni
+   - vista separata per crop normali e variazioni
+   - cancellazione con tasto Canc
 
-7. Implementata la cattura screenshot ADB in formato lossless:
-   - adb exec-out screencap -p
-   - salvataggio PNG in:
-     C:\Users\jack\Documents\Playground\HID\WhatJolo\Captures
-   - preview immediata dell'immagine acquisita
+7. Allineamento progetto <-> DB
+   - ogni acquisizione/crop viene allineata subito nel DB del progetto aperto
+   - ogni immagine del progetto viene salvata anche come blob compresso
+   - il progetto puo' essere ricreato dal DB sul file system
+   - bottone "Apri/Ricrea progetto" con messaggio "Progetto caricato"
 
-8. Aggiunta la barra superiore con bottoni progetto:
-   - Apri cartella progetto
-   - Apri DB condiviso
-   - Apri captures
+8. Dataset YOLO
+   - creazione dataset train/val dal progetto selezionato
+   - generazione anche dello split test a partire dai dati nel DB
+   - immagini positive e negative incluse
+   - labels YOLO generate automaticamente
+   - image_map.tsv per il mapping immagine sorgente
 
-9. Aggiunta la combo classe crop con classi fisse:
-   - cerca
-   - back
-   - freccia
-   - invio
-   - microfono
+9. Training YOLO
+   - scelta modello YOLO
+   - scelta profilo YOLO
+   - monitor training con metriche percentuali:
+     - Precision
+     - Recall
+     - mAP50
+     - mAP50-95
+   - commento qualita' leggibile
+   - export ONNX
+   - reset training
 
-10. Applicato look black/yellow all'interfaccia:
-    - palette nero/antracite
-    - accenti gialli
-    - tab selezionata black/orange
+10. Test/Ultra
+    - tab Ultra per test immagini
+    - liste test/train/val
+    - detection automatica sull'immagine selezionata
+    - preview floating manuale
+    - delete con Canc su test/train/val
+    - rimozione anche delle selezioni collegate nel DB quando presenti
 
-11. Aggiunta connessione automatica ad ADB all'avvio:
-    - adb start-server
-    - refresh automatico device
-    - selezione automatica del device disponibile
+11. Vista Database
+    - tab Database con stile black/yellow
+    - elenco tabelle
+    - filtro per progetto dove applicabile
+    - refresh
+    - delete singolo o multiplo con Canc
 
-12. Separata tutta la logica ADB in AdbService.cs:
-    - start-server
-    - adb devices
-    - screencap -p
-    - gestione errori adb
-
-13. Separata la logica della tab ADB in AdbCaptureTabViewModel.cs:
-    - stato ADB
-    - lista device
-    - selezione device
-    - cattura screenshot
-    - preview e path ultimo file
-
-14. Aggiunta ViewModelBase.cs:
-    - supporto PropertyChanged
-    - SetField comune
-
-15. Rifinito MainWindowViewModel:
-    - mantiene la parte generale del progetto
-    - espone AdbCaptureTab come sotto-viewmodel
-    - tiene la parte DB e la combo classi
-
-16. Corretto il calcolo dei path condivisi:
-    - distinta cartella progetto WhatJolo da root HID
-    - corretto path DB condiviso
-    - corretto path adb.exe dentro Playground\tools
-
-17. Migliorata l'inizializzazione ADB:
-    - connessione avviata nel Loaded della finestra
-    - refresh device più affidabile
-    - combo device popolata all'apertura
-
-18. Corretta la preview screenshot:
-    - immagine mostrata tutta nel riquadro
-    - scaling uniforme senza scroll
-    - finestra avviata massimizzata
-
-19. Migliorato il tema UI:
-    - combo box con colori leggibili
-    - tab selezionata black/orange
-    - palette black/yellow coerente anche nei popup
-
-20. Aggiunta selezione grafica sulla preview:
-    - drag del mouse sullo screenshot
-    - rettangolo visibile di selezione
-    - conversione in coordinate pixel reali
-    - messaggio stato con X/Y/W/H della selezione
-
-21. Aggiunto il bottone "Salva selezione":
-    - salva il crop come PNG
-    - usa la classe selezionata nella combo
-    - salva in:
-      C:\Users\jack\Documents\Playground\HID\WhatJolo\SavedCrops\<classe>\
-
-22. Aggiunta la vista laterale delle crop salvate:
-    - colonna a destra della preview
-    - mostra le crop della classe selezionata
-    - refresh automatico:
-      - all'avvio
-      - quando cambia la classe
-      - dopo il salvataggio di una nuova crop
-
-23. Verificata la build finale:
+12. Stato build
+    - build pulita verificata
     - 0 errori
     - 0 avvisi

@@ -1,7 +1,6 @@
 using System.Data.Common;
 using System.IO;
 using System.Text.Json;
-using Microsoft.Data.Sqlite;
 using Npgsql;
 
 namespace WhatJolo;
@@ -29,38 +28,35 @@ internal static class SharedDatabase
             ".."));
     }
 
-    public static string GetSqliteDatabasePath()
-    {
-        return Path.GetFullPath(Path.Combine(
-            GetHidRootPath(),
-            "ScrcpyKeyboardClient",
-            "AnnotationTemplates",
-            "annotations.sqlite3"));
-    }
-
     public static string GetDatabasePath()
     {
-        return IsPostgresConfigured() ? GetConnectionDisplayString() : GetSqliteDatabasePath();
+        return GetConnectionDisplayString();
     }
 
     public static string GetConnectionString()
     {
-        return IsPostgresConfigured()
-            ? GetPostgresConnectionString()
-            : GetSqliteConnectionString();
+        return GetPostgresConnectionString();
     }
 
     public static DbConnection CreateConnection()
     {
+        if (!IsPostgresConfigured())
+        {
+            throw new InvalidOperationException("Database PostgreSQL non connesso. Premi Connetti nella tab Istanza DB.");
+        }
+
         EnsureDatabaseReady();
-        return IsPostgresConfigured()
-            ? new NpgsqlConnection(GetPostgresConnectionString())
-            : new SqliteConnection(GetSqliteConnectionString());
+        return new NpgsqlConnection(GetPostgresConnectionString());
     }
 
     public static bool IsPostgresConfigured()
     {
         return _postgresActivated && !string.IsNullOrWhiteSpace(GetPostgresConnectionString());
+    }
+
+    public static bool IsDatabaseConnected()
+    {
+        return IsPostgresConfigured();
     }
 
     public static void ActivateConfiguredPostgres()
@@ -140,40 +136,33 @@ internal static class SharedDatabase
     {
         if (!IsPostgresConfigured())
         {
-            return GetSqliteDatabasePath();
+            return "PostgreSQL non connesso";
         }
 
         var builder = new NpgsqlConnectionStringBuilder(GetPostgresConnectionString());
         return $"PostgreSQL | Host={builder.Host} | Port={builder.Port} | Database={builder.Database} | User={builder.Username}";
     }
 
-    public static void EnsureDatabaseReady()
+    public static void EnsureDatabaseReady(Action<string>? progress = null)
     {
-        if (_initialized)
+        if (!IsPostgresConfigured() || _initialized)
         {
             return;
         }
 
         lock (InitLock)
         {
-            if (_initialized)
+            if (!IsPostgresConfigured() || _initialized)
             {
                 return;
             }
 
-            if (IsPostgresConfigured())
-            {
-                var migrator = new PostgresDatabaseMigrator(GetPostgresConnectionString(), GetSqliteConnectionString());
-                migrator.EnsureReady();
-            }
-
+            progress?.Invoke("Creazione/verifica schema PostgreSQL...");
+            var migrator = new PostgresDatabaseMigrator(GetPostgresConnectionString());
+            migrator.EnsureReady();
             _initialized = true;
+            progress?.Invoke("Schema PostgreSQL pronto.");
         }
-    }
-
-    private static string GetSqliteConnectionString()
-    {
-        return $"Data Source={GetSqliteDatabasePath()};Cache=Shared;Mode=ReadWriteCreate;";
     }
 
     private static string GetPostgresConnectionString()
@@ -181,7 +170,23 @@ internal static class SharedDatabase
         var envValue = Environment.GetEnvironmentVariable("WHATJOLO_POSTGRES_CONNECTION")?.Trim();
         if (!string.IsNullOrWhiteSpace(envValue))
         {
-            return envValue;
+            var envBuilder = new NpgsqlConnectionStringBuilder(envValue);
+            if (envBuilder.Timeout <= 0)
+            {
+                envBuilder.Timeout = 5;
+            }
+
+            if (envBuilder.CommandTimeout <= 0)
+            {
+                envBuilder.CommandTimeout = 15;
+            }
+
+            if (envBuilder.KeepAlive <= 0)
+            {
+                envBuilder.KeepAlive = 15;
+            }
+
+            return envBuilder.ConnectionString;
         }
 
         var settings = LoadPostgresSettings();
@@ -197,7 +202,10 @@ internal static class SharedDatabase
             Database = settings.Database,
             Username = settings.Username ?? string.Empty,
             Password = settings.Password ?? string.Empty,
-            Pooling = true
+            Pooling = true,
+            Timeout = 5,
+            CommandTimeout = 15,
+            KeepAlive = 15
         };
         return builder.ConnectionString;
     }

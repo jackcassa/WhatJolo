@@ -19,6 +19,7 @@ public partial class MainWindow : System.Windows.Window
     private readonly MainWindowViewModel _viewModel;
     private AdbPreviewWindow? _adbPreviewWindow;
     private UltraPreviewWindow? _ultraPreviewWindow;
+    private bool _suppressDatabaseTableAutoLoad;
 
     public MainWindow()
     {
@@ -38,10 +39,8 @@ public partial class MainWindow : System.Windows.Window
             RootTabControl.Items.Insert(0, DbInstanceTab);
             RootTabControl.SelectedItem = DbInstanceTab;
         }
-        _viewModel.InitializeProjectWorkspace();
+        await _viewModel.InitializeProjectWorkspaceAsync();
         await _viewModel.AdbCaptureTab.InitializeAdbAsync();
-        _viewModel.AdbCaptureTab.LoadSavedCrops(_viewModel.SelectedCropClass);
-        await _viewModel.AlignProjectImageBlobsAsync();
     }
 
     private async void SaveSelection_Click(object sender, RoutedEventArgs e)
@@ -143,30 +142,6 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private async void OpenSharedDatabase_Click(object sender, RoutedEventArgs e)
-    {
-        if (!_viewModel.IsDatabaseConnected)
-        {
-            _viewModel.DbInstanceStatus = "Premi Connetti nella tab Istanza DB per abilitare le altre tab.";
-            RootTabControl.SelectedItem = DbInstanceTab;
-            return;
-        }
-
-        RootTabControl.SelectedItem = DatabaseTab;
-
-        if (string.IsNullOrWhiteSpace(_viewModel.SelectedDatabaseTable) && _viewModel.Tables.Count > 0)
-        {
-            _viewModel.SelectedDatabaseTable = _viewModel.Tables[0];
-        }
-
-        await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
-    }
-
-    private void OpenCapturesFolder_Click(object sender, RoutedEventArgs e)
-    {
-        OpenInExplorer(_viewModel.AdbCaptureTab.GetCapturesFolderPath());
-    }
-
     private async void CreateDataset_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -180,19 +155,6 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
-    private async void CreateDatasetTestFromDb_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            var datasetPath = await _viewModel.CreateDatasetTestFromDatabaseAsync();
-            _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Dataset test da DB creato: {datasetPath}");
-        }
-        catch (Exception ex)
-        {
-            _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Errore creazione dataset test da DB: {ex.Message}");
-        }
-    }
-
     private async void TrainYolo_Click(object sender, RoutedEventArgs e)
     {
         var monitorWindow = new YoloTrainingMonitorWindow(_viewModel.SelectedProjectName, _viewModel.SelectedYoloModel)
@@ -202,20 +164,6 @@ public partial class MainWindow : System.Windows.Window
         monitorWindow.Show();
 
         await _viewModel.TrainYoloAsync(
-            progress => Dispatcher.Invoke(() => monitorWindow.UpdateProgress(progress)),
-            completedMessage => Dispatcher.Invoke(() => monitorWindow.MarkCompleted(completedMessage)),
-            failedMessage => Dispatcher.Invoke(() => monitorWindow.MarkFailed(failedMessage)));
-    }
-
-    private async void TestYolo_Click(object sender, RoutedEventArgs e)
-    {
-        var monitorWindow = new YoloTrainingMonitorWindow(_viewModel.SelectedProjectName, "best.pt (test)")
-        {
-            Owner = this
-        };
-        monitorWindow.Show();
-
-        await _viewModel.TestYoloAsync(
             progress => Dispatcher.Invoke(() => monitorWindow.UpdateProgress(progress)),
             completedMessage => Dispatcher.Invoke(() => monitorWindow.MarkCompleted(completedMessage)),
             failedMessage => Dispatcher.Invoke(() => monitorWindow.MarkFailed(failedMessage)));
@@ -311,7 +259,7 @@ public partial class MainWindow : System.Windows.Window
         }
 
         var savedCount = await _viewModel.UltraTab.PromoteDetectedCropsAsync(threshold);
-        _viewModel.AdbCaptureTab.LoadSavedCrops(_viewModel.SelectedCropClass);
+        await _viewModel.AdbCaptureTab.LoadSavedCropsAsync(_viewModel.SelectedCropClass);
         MessageBox.Show(
             this,
             $"Crop salvate nel training del progetto corrente: {savedCount}",
@@ -332,14 +280,14 @@ public partial class MainWindow : System.Windows.Window
         Process.Start(startInfo);
     }
 
-    private void CropClassComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void CropClassComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_viewModel == null)
         {
             return;
         }
 
-        _viewModel.AdbCaptureTab.LoadSavedCrops(_viewModel.SelectedCropClass);
+        await _viewModel.AdbCaptureTab.LoadSavedCropsAsync(_viewModel.SelectedCropClass);
     }
 
     private async void CreateProject_Click(object sender, RoutedEventArgs e)
@@ -356,7 +304,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        _viewModel.CreateOrSelectProject(prompt.EnteredText);
+        await _viewModel.CreateOrSelectProjectAsync(prompt.EnteredText);
         CloseAdbPreviewWindow();
         await _viewModel.AlignProjectImageBlobsAsync();
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
@@ -379,7 +327,7 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        _viewModel.ApplySelectedProject();
+        await _viewModel.ApplySelectedProjectAsync();
         CloseAdbPreviewWindow();
         await _viewModel.AlignProjectImageBlobsAsync();
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
@@ -499,6 +447,11 @@ public partial class MainWindow : System.Windows.Window
 
     private async void DatabaseTables_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressDatabaseTableAutoLoad)
+        {
+            return;
+        }
+
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
     }
 
@@ -507,20 +460,11 @@ public partial class MainWindow : System.Windows.Window
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
     }
 
-    private void DbInstancePasswordBox_PasswordChanged(object sender, RoutedEventArgs e)
-    {
-        if (sender is PasswordBox passwordBox)
-        {
-            _viewModel.DbInstancePassword = passwordBox.Password;
-        }
-    }
-
     private async void SaveDbInstance_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             _viewModel.SaveDatabaseInstanceSettings();
-            await _viewModel.ReloadDatabaseConnectionAsync();
         }
         catch (Exception ex)
         {
@@ -535,12 +479,28 @@ public partial class MainWindow : System.Windows.Window
 
     private async void ReloadDbInstance_Click(object sender, RoutedEventArgs e)
     {
-        await _viewModel.ReloadDatabaseConnectionAsync();
+        _suppressDatabaseTableAutoLoad = true;
+        try
+        {
+            await _viewModel.ReloadDatabaseConnectionAsync();
+        }
+        finally
+        {
+            _suppressDatabaseTableAutoLoad = false;
+        }
     }
 
     private async void ConnectDbInstance_Click(object sender, RoutedEventArgs e)
     {
-        await _viewModel.ConnectDatabaseInstanceAsync();
+        _suppressDatabaseTableAutoLoad = true;
+        try
+        {
+            await _viewModel.ConnectDatabaseInstanceAsync();
+        }
+        finally
+        {
+            _suppressDatabaseTableAutoLoad = false;
+        }
     }
 
     private async void DatabaseGrid_KeyDown(object sender, KeyEventArgs e)
@@ -736,8 +696,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         AdbCaptureTab = new AdbCaptureTabViewModel();
         UltraTab = new UltraTabViewModel();
         SharedDatabase.DeactivatePostgres();
-        _databasePath = SharedDatabase.GetSqliteDatabasePath();
-        _databaseBackendName = "Backend attivo: SQLite";
+        _databasePath = SharedDatabase.GetConnectionDisplayString();
+        _databaseBackendName = "Backend attivo: non connesso";
         _statusText = string.Empty;
         _selectedCropClass = "cerca";
         _selectedYoloModel = "yolo11s.pt";
@@ -748,7 +708,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         _dbInstancePort = "5432";
         _dbInstanceDatabase = "whatjolo";
         _dbInstanceUsername = "postgres";
-        _dbInstancePassword = string.Empty;
+        _dbInstancePassword = "postgres";
         _remoteAccessAddresses = BuildRemoteAccessAddresses();
         _dbInstanceStatus = $"Istanza DB inizializzata con i dati locali di {Environment.MachineName}.";
         _isDatabaseConnected = false;
@@ -800,26 +760,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             ProjectNames.Add(_selectedProjectName);
         }
 
-        if (!File.Exists(SharedDatabase.GetSqliteDatabasePath()))
-        {
-            _statusText = "DB non trovato.";
-            LoadDatabaseInstanceSettings();
-            return;
-        }
-
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            Tables.Add(reader.GetString(0));
-        }
-
         LoadDatabaseInstanceSettings();
-        _statusText = $"Tabelle lette: {Tables.Count} | PostgreSQL remoto non connesso";
+        _statusText = "PostgreSQL remoto non connesso. Premi Connetti.";
     }
 
     public string StatusText
@@ -1034,8 +976,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public string DbConnectionPreview =>
         DbInstanceEnabled
-            ? $"Host={DbInstanceHost};Port={(int.TryParse(DbInstancePort, out var port) ? port : 5432)};Database={DbInstanceDatabase};Username={DbInstanceUsername};Password=******"
-            : "PostgreSQL remoto disabilitato. L'app usera SQLite locale.";
+            ? $"Host={DbInstanceHost};Port={(int.TryParse(DbInstancePort, out var port) ? port : 5432)};Database={DbInstanceDatabase};Username={DbInstanceUsername};Password={DbInstancePassword}"
+            : "PostgreSQL remoto disabilitato.";
 
     public string DbInstanceStatus
     {
@@ -1049,7 +991,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         private set => SetField(ref _isDatabaseConnected, value);
     }
 
-    public void InitializeProjectWorkspace()
+    public async Task InitializeProjectWorkspaceAsync()
     {
         if (ProjectNames.Count == 0)
         {
@@ -1066,7 +1008,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             ProjectNames.Add(SelectedProjectName);
         }
 
-        ApplySelectedProject();
+        if (IsDatabaseConnected)
+        {
+            await ApplySelectedProjectAsync();
+            return;
+        }
+
+        await AdbCaptureTab.SetCurrentProjectAsync(SelectedProjectName, SelectedCropClass);
+        UltraTab.SetCurrentProject(SelectedProjectName);
+        StatusText = $"Progetto corrente: {SelectedProjectName} | PostgreSQL non connesso";
     }
 
     public void RefreshProjects()
@@ -1078,7 +1028,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    public void CreateOrSelectProject(string projectName)
+    public async Task CreateOrSelectProjectAsync(string projectName)
     {
         var ensuredName = _workspaceService.EnsureProject(projectName);
         if (!ProjectNames.Contains(ensuredName))
@@ -1087,10 +1037,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         SelectedProjectName = ensuredName;
-        ApplySelectedProject();
+        await ApplySelectedProjectAsync();
     }
 
-    public void ApplySelectedProject()
+    public async Task ApplySelectedProjectAsync()
     {
         var ensuredName = _workspaceService.EnsureProject(SelectedProjectName);
         SelectedProjectName = ensuredName;
@@ -1099,14 +1049,24 @@ public sealed class MainWindowViewModel : ViewModelBase
             ProjectNames.Add(ensuredName);
         }
 
-        ApplyProjectClasses(ensuredName);
-        AdbCaptureTab.SetCurrentProject(ensuredName, SelectedCropClass);
+        if (IsDatabaseConnected)
+        {
+            ApplyProjectClasses(ensuredName);
+        }
+        await AdbCaptureTab.SetCurrentProjectAsync(ensuredName, SelectedCropClass);
         UltraTab.SetCurrentProject(ensuredName);
-        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {ensuredName} | Classi: {ActiveProjectClassesSummary}";
+        StatusText = IsDatabaseConnected
+            ? $"Tabelle lette: {Tables.Count} | Progetto corrente: {ensuredName} | Classi: {ActiveProjectClassesSummary}"
+            : $"Progetto corrente: {ensuredName} | PostgreSQL non connesso";
     }
 
     public async Task AlignProjectImageBlobsAsync()
     {
+        if (!IsDatabaseConnected)
+        {
+            return;
+        }
+
         var imageCount = await _projectImageBlobService.SyncProjectAsync(SelectedProjectName);
         StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Blob immagini allineati: {imageCount}";
     }
@@ -1141,19 +1101,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         var result = await _yoloDatasetBuilderService.BuildAsync(SelectedProjectName, activeClasses);
         await AlignProjectImageBlobsAsync();
         StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Dataset: {result.ImageCount} immagini / {result.ClassCount} classi";
-        return result.DatasetFolder;
-    }
-
-    public async Task<string> CreateDatasetTestFromDatabaseAsync()
-    {
-        var activeClasses = ProjectClassOptions
-            .Where(option => option.IsSelected)
-            .Select(option => option.Name)
-            .ToArray();
-
-        var result = await _yoloDatasetBuilderService.BuildTestFromDatabaseAsync(SelectedProjectName, activeClasses);
-        await AlignProjectImageBlobsAsync();
-        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Test DB: {result.ImageCount} immagini / {result.ClassCount} classi";
         return result.DatasetFolder;
     }
 
@@ -1447,7 +1394,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             return storedPath;
         }
 
-        var root = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(SharedDatabase.GetSqliteDatabasePath())!, ".."));
+        var root = SharedDatabase.GetProjectDirectoryPath();
         return Path.GetFullPath(Path.Combine(root, storedPath.Replace('/', Path.DirectorySeparatorChar)));
     }
 
@@ -1467,7 +1414,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             SharedDatabase.DeactivatePostgres();
             IsDatabaseConnected = false;
-            DbInstanceStatus = "Configurazione PostgreSQL disabilitata. L'app usera SQLite locale.";
+            DbInstanceStatus = "Configurazione PostgreSQL disabilitata. Premi Connetti dopo averla riattivata.";
             return;
         }
 
@@ -1504,9 +1451,28 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         try
         {
+            DbInstanceStatus = "Salvataggio configurazione PostgreSQL...";
+            await Task.Yield();
+            SaveDatabaseInstanceSettings();
+
+            DbInstanceStatus = $"Attivazione connessione PostgreSQL verso {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}...";
+            await Task.Yield();
             SharedDatabase.ActivateConfiguredPostgres();
+
+            DbInstanceStatus = "Inizializzazione schema e verifica connessione in corso...";
+            await Task.Yield();
             await ReloadDatabaseConnectionAsync();
+
             IsDatabaseConnected = true;
+
+            DbInstanceStatus = $"Connessione riuscita. Applicazione progetto {SelectedProjectName}...";
+            await Task.Yield();
+            await ApplySelectedProjectAsync();
+
+            DbInstanceStatus = $"Allineamento blob immagini del progetto {SelectedProjectName}...";
+            await Task.Yield();
+            await AlignProjectImageBlobsAsync();
+
             DbInstanceStatus = $"Connesso a PostgreSQL su {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.";
         }
         catch (Exception ex)
@@ -1519,30 +1485,49 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public async Task ReloadDatabaseConnectionAsync()
     {
-        SharedDatabase.ResetInitialization();
-        SharedDatabase.EnsureDatabaseReady();
+        DbInstanceStatus = "Preparazione connessione PostgreSQL...";
+        await Task.Yield();
+
+        IProgress<string> progress = new Progress<string>(message => DbInstanceStatus = message);
+        var tableNames = await Task.Run(() =>
+        {
+            progress.Report("Reset inizializzazione backend PostgreSQL...");
+            SharedDatabase.ResetInitialization();
+            SharedDatabase.EnsureDatabaseReady(message => progress.Report(message));
+
+            progress.Report("Apertura connessione PostgreSQL...");
+            var names = new List<string>();
+            using var connection = SharedDatabase.CreateConnection();
+            connection.Open();
+
+            progress.Report("Lettura elenco tabelle PostgreSQL...");
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                names.Add(reader.GetString(0));
+            }
+
+            progress.Report($"Tabelle PostgreSQL lette: {names.Count}.");
+            return names;
+        });
+
         DatabasePath = SharedDatabase.GetConnectionDisplayString();
-        DatabaseBackendName = SharedDatabase.IsPostgresConfigured() ? "Backend attivo: PostgreSQL" : "Backend attivo: SQLite";
+        DatabaseBackendName = SharedDatabase.IsPostgresConfigured() ? "Backend attivo: PostgreSQL" : "Backend attivo: non connesso";
         LoadDatabaseInstanceSettings();
         IsDatabaseConnected = true;
 
         Tables.Clear();
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = SharedDatabase.IsPostgresConfigured()
-            ? "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"
-            : "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;";
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        foreach (var tableName in tableNames)
         {
-            Tables.Add(reader.GetString(0));
+            Tables.Add(tableName);
         }
 
-        if (!string.IsNullOrWhiteSpace(SelectedDatabaseTable))
-        {
-            await LoadDatabaseTableAsync(SelectedDatabaseTable);
-        }
+        DatabaseRowsView = null;
+        DatabaseTableStatus = string.IsNullOrWhiteSpace(SelectedDatabaseTable)
+            ? $"Tabelle disponibili: {Tables.Count}. Apri la tab Database per caricare i dati."
+            : $"Tabelle disponibili: {Tables.Count}. Seleziona '{SelectedDatabaseTable}' nella tab Database per caricare i dati.";
 
         StatusText = $"Tabelle lette: {Tables.Count} | {DatabaseBackendName}";
     }
@@ -1563,10 +1548,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         DbInstancePort = (settings.Port <= 0 ? 5432 : settings.Port).ToString();
         DbInstanceDatabase = string.IsNullOrWhiteSpace(settings.Database) ? "whatjolo" : settings.Database;
         DbInstanceUsername = string.IsNullOrWhiteSpace(settings.Username) ? "postgres" : settings.Username;
-        DbInstancePassword = settings.Password ?? string.Empty;
+        DbInstancePassword = string.IsNullOrWhiteSpace(settings.Password) ? "postgres" : settings.Password;
         RemoteAccessAddresses = BuildRemoteAccessAddresses();
         DatabasePath = SharedDatabase.GetConnectionDisplayString();
-        DatabaseBackendName = SharedDatabase.IsPostgresConfigured() ? "Backend attivo: PostgreSQL" : "Backend attivo: SQLite";
+        DatabaseBackendName = SharedDatabase.IsPostgresConfigured() ? "Backend attivo: PostgreSQL" : "Backend attivo: non connesso";
         if (SharedDatabase.IsPostgresConfigured())
         {
             DbInstanceStatus = $"Connesso a PostgreSQL su {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.";
@@ -1700,71 +1685,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             YoloStatusText = ex.Message;
             AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Errore training YOLO: {ex.Message}");
-            onFailed?.Invoke(ex.Message);
-        }
-    }
-
-    public async Task TestYoloAsync(
-        Action<YoloTrainingProgress>? onProgress = null,
-        Action<string>? onCompleted = null,
-        Action<string>? onFailed = null)
-    {
-        var datasetPath = _workspaceService.GetYoloDatasetPath(SelectedProjectName);
-        var dataYamlPath = Path.Combine(datasetPath, "data.yaml");
-        var testImagesPath = Path.Combine(datasetPath, "images", "test");
-        if (!File.Exists(dataYamlPath) || !Directory.Exists(testImagesPath) || !Directory.EnumerateFiles(testImagesPath).Any())
-        {
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Dataset test non pronto. Crea prima il test dal DB.");
-            YoloStatusText = "Test dataset non pronto";
-            onFailed?.Invoke("Test dataset non pronto.");
-            return;
-        }
-
-        YoloEpochInfo = "Test YOLO: avvio...";
-        var trainingProfile = SelectedYoloTrainingProfile ?? new YoloTrainingProfile
-        {
-            Name = "Medio",
-            RecommendedModel = SelectedYoloModel,
-            Epochs = 100,
-            ImageSize = 960,
-            Batch = 6
-        };
-        YoloStatusText = $"Test YOLO su {SelectedProjectName}";
-        AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Test YOLO avviato sullo split test...");
-
-        var progress = new Progress<YoloTrainingProgress>(progressUpdate =>
-        {
-            YoloStatusText = $"[test/{progressUpdate.Source}] {progressUpdate.RawLine}";
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] YOLO test/{progressUpdate.Source}: {progressUpdate.RawLine}");
-            onProgress?.Invoke(progressUpdate);
-        });
-
-        try
-        {
-            var result = await _yoloTrainingService.TestAsync(
-                SelectedProjectName,
-                dataYamlPath,
-                _workspaceService.GetYoloProjectPath(SelectedProjectName),
-                trainingProfile.ImageSize,
-                progress);
-
-            if (result.ExitCode != 0)
-            {
-                YoloStatusText = $"Test YOLO fallito | Log: {result.TrainLogPath}";
-                AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Test YOLO fallito. Log: {result.TrainLogPath}");
-                onFailed?.Invoke($"Log: {result.TrainLogPath}");
-                return;
-            }
-
-            YoloEpochInfo = "Test YOLO: completato";
-            YoloStatusText = $"Test completato: {result.TrainLogPath}";
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Test YOLO completato. Log: {result.TrainLogPath}");
-            onCompleted?.Invoke($"Log: {result.TrainLogPath}");
-        }
-        catch (Exception ex)
-        {
-            YoloStatusText = ex.Message;
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Errore test YOLO: {ex.Message}");
             onFailed?.Invoke(ex.Message);
         }
     }

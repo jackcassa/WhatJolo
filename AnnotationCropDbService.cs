@@ -2,25 +2,21 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Windows;
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
 
 namespace WhatJolo;
 
 internal sealed class AnnotationCropDbService
 {
-    private readonly string _connectionString;
     private readonly string _storageRootPath;
 
     public AnnotationCropDbService()
     {
-        _connectionString = SharedDatabase.GetConnectionString();
-        _storageRootPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(SharedDatabase.GetSqliteDatabasePath())!, ".."));
-        SharedDatabase.EnsureDatabaseReady();
-        EnsureProjectCropVariationColumn();
+        _storageRootPath = SharedDatabase.GetProjectDirectoryPath();
     }
 
     public async Task SaveCropAsync(string projectName, string labelName, string sourceImagePath, string cropImagePath, Int32Rect bounds, bool isVariation = false)
     {
+        EnsureProjectCropVariationColumn();
         var cropHash = await ComputeFileSha256Async(cropImagePath);
 
         await using var connection = SharedDatabase.CreateConnection();
@@ -42,6 +38,7 @@ internal sealed class AnnotationCropDbService
                     Y,
                     Width,
                     Height,
+                    CreatedAtUtc,
                     UpdatedAtUtc
                 )
                 VALUES
@@ -53,6 +50,7 @@ internal sealed class AnnotationCropDbService
                     @Y,
                     @Width,
                     @Height,
+                    CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 )
                 ON CONFLICT(CropHash) DO UPDATE SET
@@ -87,6 +85,7 @@ internal sealed class AnnotationCropDbService
                     LabelName,
                     CropAssetId,
                     IsVariation,
+                    CreatedAtUtc,
                     UpdatedAtUtc
                 )
                 VALUES
@@ -95,6 +94,7 @@ internal sealed class AnnotationCropDbService
                     @LabelName,
                     @CropAssetId,
                     @IsVariation,
+                    CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 )
                 ON CONFLICT(ProjectName, LabelName, CropAssetId) DO UPDATE SET
@@ -113,6 +113,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<bool> DeleteCropAsync(string projectName, string labelName, string cropImagePath)
     {
+        EnsureProjectCropVariationColumn();
         var storedCropPath = ConvertToStoredPath(cropImagePath);
 
         await using var connection = SharedDatabase.CreateConnection();
@@ -183,6 +184,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<IReadOnlyList<ProjectCropRecord>> GetProjectCropsAsync(string projectName, IEnumerable<string> labelNames)
     {
+        EnsureProjectCropVariationColumn();
         var normalizedLabels = labelNames
             .Where(static name => !string.IsNullOrWhiteSpace(name))
             .Select(static name => name.Trim().ToLowerInvariant())
@@ -248,6 +250,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<IReadOnlyList<ProjectCropRecord>> GetAllProjectCropsAsync(string projectName)
     {
+        EnsureProjectCropVariationColumn();
         await using var connection = SharedDatabase.CreateConnection();
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
@@ -291,6 +294,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<IReadOnlyList<ProjectCropRecord>> GetProjectCropsByLabelAsync(string projectName, string labelName, bool isVariation)
     {
+        EnsureProjectCropVariationColumn();
         var normalizedLabelName = string.IsNullOrWhiteSpace(labelName)
             ? string.Empty
             : labelName.Trim().ToLowerInvariant();
@@ -346,6 +350,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<ProjectCropRecord?> GetProjectCropByImagePathAsync(string projectName, string cropImagePath)
     {
+        EnsureProjectCropVariationColumn();
         var storedCropPath = ConvertToStoredPath(cropImagePath);
 
         await using var connection = SharedDatabase.CreateConnection();
@@ -393,6 +398,7 @@ internal sealed class AnnotationCropDbService
 
     public async Task<int> DeleteCropsBySourceImageAsync(string projectName, string sourceImagePath)
     {
+        EnsureProjectCropVariationColumn();
         var normalizedSourcePath = Path.GetFullPath(sourceImagePath);
         var storedSourcePath = ConvertToStoredPath(normalizedSourcePath);
         var itemsToDelete = new List<(string LabelName, string CropImagePath)>();
@@ -480,36 +486,16 @@ internal sealed class AnnotationCropDbService
 
     private void EnsureProjectCropVariationColumn()
     {
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-        if (SharedDatabase.IsPostgresConfigured())
+        if (!SharedDatabase.IsDatabaseConnected())
         {
-            using var alterPgCommand = connection.CreateCommand();
-            alterPgCommand.CommandText = "ALTER TABLE ProjectCropLink ADD COLUMN IF NOT EXISTS IsVariation INTEGER NOT NULL DEFAULT 0;";
-            alterPgCommand.ExecuteNonQuery();
             return;
         }
 
-        using var checkCommand = connection.CreateCommand();
-        checkCommand.CommandText = "PRAGMA table_info(ProjectCropLink);";
-        using var reader = checkCommand.ExecuteReader();
-
-        var hasVariationColumn = false;
-        while (reader.Read())
-        {
-            if (string.Equals(Convert.ToString(reader["name"]), "IsVariation", StringComparison.OrdinalIgnoreCase))
-            {
-                hasVariationColumn = true;
-                break;
-            }
-        }
-
-        if (!hasVariationColumn)
-        {
-            using var alterCommand = connection.CreateCommand();
-            alterCommand.CommandText = "ALTER TABLE ProjectCropLink ADD COLUMN IsVariation INTEGER NOT NULL DEFAULT 0;";
-            alterCommand.ExecuteNonQuery();
-        }
+        using var connection = SharedDatabase.CreateConnection();
+        connection.Open();
+        using var alterPgCommand = connection.CreateCommand();
+        alterPgCommand.CommandText = "ALTER TABLE ProjectCropLink ADD COLUMN IF NOT EXISTS IsVariation INTEGER NOT NULL DEFAULT 0;";
+        alterPgCommand.ExecuteNonQuery();
     }
 
     private static void AddParameter(DbCommand command, string name, object value)
