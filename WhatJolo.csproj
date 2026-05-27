@@ -13,6 +13,22 @@
     <PackageReference Include="System.Drawing.Common" Version="10.0.3" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="WhatJolo.Shared\WhatJolo.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Remove="Tools\**\*.cs" />
+    <Compile Remove="Navigation\**\*.cs" />
+    <Compile Remove="WhatJolo.Shared\**\*.cs" />
+    <Compile Remove="ViewModelBase.cs" />
+    <Compile Remove="PostgresConnectionSettings.cs" />
+    <Compile Remove="PostgresDatabaseMigrator.cs" />
+    <Compile Remove="SharedDatabase.cs" />
+    <Compile Remove="ProjectWorkspaceService.cs" />
+    <Compile Remove="AdbService.cs" />
+    <Compile Remove="ProjectModelBlobService.cs" />
+    <Compile Remove="YoloIconDetector.cs" />
+    <Page Remove="Navigation\**\*.xaml" />
+    <Page Remove="WhatJolo.Shared\**\*.xaml" />
+    <ApplicationDefinition Remove="Navigation\App.xaml" />
   </ItemGroup>
 </Project>

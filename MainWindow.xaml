@@ -47,32 +47,7 @@
                             <TextBlock FontSize="12"
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource ForegroundMutedBrush}"
-                                       Text="Classi YOLO progetto" />
-                            <ComboBox Width="210"
-                                      Margin="0,6,0,0"
-                                      IsEditable="True"
-                                      IsReadOnly="True"
-                                      StaysOpenOnEdit="True"
-                                      IsTextSearchEnabled="False"
-                                      Text="{Binding ActiveProjectClassesSummary, Mode=OneWay}">
-                                <ComboBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <CheckBox Margin="4,2"
-                                                  Content="{Binding Name}"
-                                                  IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    </DataTemplate>
-                                </ComboBox.ItemTemplate>
-                                <ComboBox.ItemsSource>
-                                    <Binding Path="ProjectClassOptions" />
-                                </ComboBox.ItemsSource>
-                            </ComboBox>
-                        </StackPanel>
-
-                        <StackPanel Margin="0,0,12,8">
-                            <TextBlock FontSize="12"
-                                       FontWeight="SemiBold"
-                                       Foreground="{StaticResource ForegroundMutedBrush}"
-                                       Text="Classe crop" />
+                                       Text="Classe progetto" />
                             <ComboBox Width="140"
                                       Margin="0,6,0,0"
                                       ItemsSource="{Binding CropClasses}"
@@ -272,15 +247,15 @@
                                     Height="40"
                                     FontSize="14"
                                     FontWeight="Bold"
-                                    Content="Salva selezione"
-                                    Click="SaveSelection_Click" />
+                                    Content="Variazione x10"
+                                    Click="GenerateVariations_Click" />
 
                             <Button Margin="0,10,0,0"
                                     Height="40"
                                     FontSize="14"
                                     FontWeight="Bold"
-                                    Content="Variazione x10"
-                                    Click="GenerateVariations_Click" />
+                                    Content="Variazioni per tutte"
+                                    Click="GenerateVariationsForAll_Click" />
 
                             <Separator Margin="0,16,0,16" />
 
@@ -298,6 +273,31 @@
                             <TextBlock Margin="0,6,0,0"
                                        Text="{Binding AdbCaptureTab.LastCapturePath}"
                                        TextWrapping="Wrap" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="{Binding AdbCaptureTab.CapturedImageCount, StringFormat=Capture acquisite ({0})}" />
+                            <ListBox Margin="0,6,0,0"
+                                     Height="180"
+                                     ItemsSource="{Binding AdbCaptureTab.CapturedImages}"
+                                     SelectedItem="{Binding AdbCaptureTab.SelectedCapturedImage}"
+                                     SelectionChanged="CapturedImages_SelectionChanged">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel Margin="4">
+                                            <Image Width="44"
+                                                   Height="44"
+                                                   Margin="0,0,8,0"
+                                                   Stretch="Uniform"
+                                                   Source="{Binding PreviewImage}" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Text="{Binding FileName}"
+                                                       TextWrapping="Wrap" />
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </StackPanel>
                     </Border>
 
@@ -311,8 +311,10 @@
                         </Grid.RowDefinitions>
 
                         <GroupBox Header="{Binding AdbCaptureTab.SavedCropCount, StringFormat=Crop salvate ({0})}">
-                            <ListBox ItemsSource="{Binding AdbCaptureTab.SavedCrops}"
+                            <ListBox x:Name="SavedCropsListBox"
+                                     ItemsSource="{Binding AdbCaptureTab.SavedCrops}"
                                      SelectedItem="{Binding AdbCaptureTab.SelectedSavedCrop}"
+                                     SelectionMode="Extended"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                                      KeyDown="SavedCropsList_KeyDown">

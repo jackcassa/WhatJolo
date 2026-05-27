@@ -82,6 +82,11 @@ public partial class MainWindow : System.Windows.Window
         _adbPreviewWindow?.ClearSelection();
     }
 
+    private void AdbPreview_SaveSelectionRequested(object? sender, EventArgs e)
+    {
+        SaveSelection_Click(sender!, new RoutedEventArgs());
+    }
+
     private async void GenerateVariations_Click(object sender, RoutedEventArgs e)
     {
         if (_viewModel.AdbCaptureTab.SelectedSavedCrop == null && _viewModel.AdbCaptureTab.SelectedVariationCrop == null)
@@ -108,6 +113,43 @@ public partial class MainWindow : System.Windows.Window
         catch (Exception ex)
         {
             _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Errore generazione variazioni: {ex.Message}");
+        }
+    }
+
+    private async void GenerateVariationsForAll_Click(object sender, RoutedEventArgs e)
+    {
+        var selectedItems = SavedCropsListBox.SelectedItems
+            .OfType<SavedCropItem>()
+            .ToArray();
+
+        if (selectedItems.Length == 0)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage("Seleziona prima una o piu crop salvate.");
+            return;
+        }
+
+        try
+        {
+            var generatedCount = await _viewModel.AdbCaptureTab.GenerateVariationsForCropPathsAsync(
+                _viewModel.SelectedCropClass,
+                selectedItems.Select(item => item.FilePath),
+                10);
+
+            if (generatedCount <= 0)
+            {
+                return;
+            }
+
+            MessageBox.Show(
+                this,
+                $"Variazioni generate: {generatedCount}",
+                "Variazioni crop",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Errore generazione variazioni multiple: {ex.Message}");
         }
     }
 
@@ -373,7 +415,27 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        _viewModel.SaveSelectedCropClassForCurrentProject();
         await _viewModel.AdbCaptureTab.LoadSavedCropsAsync(_viewModel.SelectedCropClass);
+    }
+
+    private async void CapturedImages_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_viewModel?.AdbCaptureTab == null ||
+            _viewModel.AdbCaptureTab.IsLoadingCapturedImages ||
+            _viewModel.AdbCaptureTab.SelectedCapturedImage == null)
+        {
+            return;
+        }
+
+        var loaded = await _viewModel.AdbCaptureTab.LoadSelectedCaptureAsync();
+        if (!loaded)
+        {
+            return;
+        }
+
+        EnsureAdbPreviewWindow();
+        _adbPreviewWindow?.ClearSelection();
     }
 
     private async void CreateProject_Click(object sender, RoutedEventArgs e)
@@ -671,7 +733,15 @@ public partial class MainWindow : System.Windows.Window
                 Left = Left + Math.Max(30, Width - 1280),
                 Top = Top + 20
             };
-            _adbPreviewWindow.Closed += (_, _) => _adbPreviewWindow = null;
+            _adbPreviewWindow.SaveSelectionRequested += AdbPreview_SaveSelectionRequested;
+            _adbPreviewWindow.Closed += (_, _) =>
+            {
+                if (_adbPreviewWindow != null)
+                {
+                    _adbPreviewWindow.SaveSelectionRequested -= AdbPreview_SaveSelectionRequested;
+                }
+                _adbPreviewWindow = null;
+            };
             _adbPreviewWindow.Show();
             return;
         }
@@ -782,6 +852,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         "invio",
         "microfono"
     };
+    public ObservableCollection<string> ActiveProjectClasses { get; } = new();
     public ObservableCollection<string> YoloModelOptions { get; } = new()
     {
         "yolo11n.pt",
@@ -837,12 +908,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         _yoloEpochInfo = "Epoca corrente: -";
         _yoloStatusText = _yoloTrainingService.DetectRuntimeDescription();
         _databaseTableStatus = "Seleziona una tabella per vedere i dati.";
-        _dbInstanceHost = GetDefaultDbInstanceHost();
+        _dbInstanceHost = SharedAppBootstrap.GetDefaultDbInstanceHost();
         _dbInstancePort = "5432";
         _dbInstanceDatabase = "whatjolo";
         _dbInstanceUsername = "postgres";
         _dbInstancePassword = "postgres";
-        _remoteAccessAddresses = BuildRemoteAccessAddresses();
+        _remoteAccessAddresses = SharedAppBootstrap.BuildRemoteAccessAddresses();
         _dbInstanceStatus = $"Istanza DB inizializzata con i dati locali di {Environment.MachineName}.";
         _isDatabaseConnected = false;
         YoloTrainingProfiles.Add(new YoloTrainingProfile
@@ -880,14 +951,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             option.PropertyChanged += ProjectClassOption_PropertyChanged;
             ProjectClassOptions.Add(option);
         }
+        RefreshActiveProjectClasses();
 
-        var existingProjects = _workspaceService.GetProjectNames();
-        foreach (var projectName in existingProjects)
+        var initialCatalog = SharedAppBootstrap.LoadProjectCatalog(_workspaceService, fallbackProjectName: "Default");
+        foreach (var projectName in initialCatalog.ProjectNames)
         {
             ProjectNames.Add(projectName);
         }
 
-        _selectedProjectName = ProjectNames.FirstOrDefault() ?? _workspaceService.EnsureProject("Default");
+        _selectedProjectName = initialCatalog.SelectedProjectName ?? _workspaceService.EnsureProject("Default");
         if (ProjectNames.Count == 0)
         {
             ProjectNames.Add(_selectedProjectName);
@@ -999,10 +1071,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         get
         {
-            var selectedNames = ProjectClassOptions
-                .Where(option => option.IsSelected)
-                .Select(option => option.Name)
-                .ToList();
+            var selectedNames = ActiveProjectClasses.ToList();
 
             return selectedNames.Count switch
             {
@@ -1162,9 +1231,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public void RefreshProjects()
     {
-        var previousSelection = SelectedProjectName;
+        var snapshot = SharedAppBootstrap.LoadProjectCatalog(_workspaceService, SelectedProjectName);
         ProjectNames.Clear();
-        foreach (var projectName in _workspaceService.GetProjectNames())
+        foreach (var projectName in snapshot.ProjectNames)
         {
             ProjectNames.Add(projectName);
         }
@@ -1174,13 +1243,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (!string.IsNullOrWhiteSpace(previousSelection) && ProjectNames.Contains(previousSelection))
+        if (!string.IsNullOrWhiteSpace(snapshot.SelectedProjectName))
         {
-            SelectedProjectName = previousSelection;
+            SelectedProjectName = snapshot.SelectedProjectName;
             return;
         }
-
-        SelectedProjectName = ProjectNames.First();
     }
 
     public async Task CreateOrSelectProjectAsync(string projectName)
@@ -1239,44 +1306,62 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private async Task SelectCropClassForProjectAsync(string projectName)
     {
-        var activeClasses = ProjectClassOptions
-            .Where(option => option.IsSelected)
-            .Select(option => option.Name)
+        var availableClasses = CropClasses
+            .Where(static className => !string.IsNullOrWhiteSpace(className))
+            .Select(static className => className.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        if (activeClasses.Length == 0)
+        if (availableClasses.Length == 0)
         {
             return;
         }
 
-        var records = await _annotationCropDbService.GetAllProjectCropsAsync(projectName);
-        var labelsWithCrops = records
-            .Select(record => record.LabelName)
-            .Where(label => !string.IsNullOrWhiteSpace(label))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        var selectedClass = _workspaceService.LoadSelectedCropClass(projectName, availableClasses);
 
-        var selectedClass = activeClasses.FirstOrDefault(activeClass =>
-            labelsWithCrops.Contains(activeClass, StringComparer.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(selectedClass))
+        {
+            var records = await _annotationCropDbService.GetAllProjectCropsAsync(projectName);
+            var labelsWithCrops = records
+                .Select(record => record.LabelName)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
 
-        selectedClass ??= activeClasses.Contains(SelectedCropClass, StringComparer.OrdinalIgnoreCase)
+            selectedClass = availableClasses.FirstOrDefault(activeClass =>
+                labelsWithCrops.Contains(activeClass, StringComparer.OrdinalIgnoreCase));
+        }
+
+        selectedClass ??= availableClasses.Contains(SelectedCropClass, StringComparer.OrdinalIgnoreCase)
             ? SelectedCropClass
-            : activeClasses.First();
+            : availableClasses.First();
 
         if (!string.Equals(SelectedCropClass, selectedClass, StringComparison.OrdinalIgnoreCase))
         {
             SelectedCropClass = selectedClass;
         }
+
+        SaveSelectedCropClassForCurrentProject();
+    }
+
+    public void SaveSelectedCropClassForCurrentProject()
+    {
+        if (string.IsNullOrWhiteSpace(SelectedProjectName) || string.IsNullOrWhiteSpace(SelectedCropClass))
+        {
+            return;
+        }
+
+        _workspaceService.SaveSelectedCropClass(SelectedProjectName, SelectedCropClass);
     }
 
     public string? FindLatestYoloRunPath()
     {
-        return _workspaceService.FindLatestYoloRunPath(SelectedProjectName);
+        return _workspaceService.FindLatestYoloRunPath(SelectedProjectName, SelectedCropClass);
     }
 
     public string? ResetLatestYoloRun()
     {
-        return _workspaceService.ResetLatestYoloRun(SelectedProjectName);
+        return _workspaceService.ResetLatestYoloRun(SelectedProjectName, SelectedCropClass);
     }
 
     public async Task<ProjectModelBlobSaveResult> SaveBestOnnxToDatabaseAsync()
@@ -1290,14 +1375,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public async Task<string> CreateDatasetStructureAsync()
     {
-        var activeClasses = ProjectClassOptions
-            .Where(option => option.IsSelected)
-            .Select(option => option.Name)
-            .ToArray();
-
-        var result = await _yoloDatasetBuilderService.BuildAsync(SelectedProjectName, activeClasses);
+        var targetClass = SelectedCropClass.Trim().ToLowerInvariant();
+        var result = await _yoloDatasetBuilderService.BuildAsync(SelectedProjectName, new[] { targetClass });
         await AlignProjectImageBlobsAsync();
-        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Dataset: {result.ImageCount} immagini / {result.ClassCount} classi";
+        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classe training: {targetClass} | Dataset: {result.ImageCount} immagini / {result.ClassCount} classi";
         return result.DatasetFolder;
     }
 
@@ -1760,71 +1841,16 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         var settings = SharedDatabase.LoadPostgresSettings();
         DbInstanceEnabled = settings.Enabled;
-        DbInstanceHost = string.IsNullOrWhiteSpace(settings.Host) ? GetDefaultDbInstanceHost() : settings.Host;
+        DbInstanceHost = string.IsNullOrWhiteSpace(settings.Host) ? SharedAppBootstrap.GetDefaultDbInstanceHost() : settings.Host;
         DbInstancePort = (settings.Port <= 0 ? 5432 : settings.Port).ToString();
         DbInstanceDatabase = string.IsNullOrWhiteSpace(settings.Database) ? "whatjolo" : settings.Database;
         DbInstanceUsername = string.IsNullOrWhiteSpace(settings.Username) ? "postgres" : settings.Username;
         DbInstancePassword = string.IsNullOrWhiteSpace(settings.Password) ? "postgres" : settings.Password;
-        RemoteAccessAddresses = BuildRemoteAccessAddresses();
+        RemoteAccessAddresses = SharedAppBootstrap.BuildRemoteAccessAddresses();
         DatabasePath = SharedDatabase.GetConnectionDisplayString();
         DatabaseBackendName = SharedDatabase.IsPostgresConfigured() ? "Backend attivo: PostgreSQL" : "Backend attivo: non connesso";
-        if (SharedDatabase.IsPostgresConfigured())
-        {
-            DbInstanceStatus = $"Connesso a PostgreSQL su {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.";
-        }
-        else if (string.IsNullOrWhiteSpace(settings.Host) && string.IsNullOrWhiteSpace(settings.Password))
-        {
-            DbInstanceStatus = $"Istanza DB inizializzata con i dati locali di {Environment.MachineName}.";
-        }
-        else
-        {
-            DbInstanceStatus = $"Configurazione pronta per {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}. Premi Connetti.";
-        }
+        DbInstanceStatus = SharedAppBootstrap.BuildDbInstanceStatus(settings, DbInstanceHost, DbInstancePort, DbInstanceDatabase);
         OnPropertyChanged(nameof(DbConnectionPreview));
-    }
-
-    private static string BuildRemoteAccessAddresses()
-    {
-        var lines = new List<string> { $"MachineName: {Environment.MachineName}" };
-
-        try
-        {
-            var ipAddresses = Dns.GetHostAddresses(Dns.GetHostName())
-                .Where(address => address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address))
-                .Select(address => address.ToString())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(address => address, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-
-            lines.Add(ipAddresses.Length > 0
-                ? "IPv4: " + string.Join(", ", ipAddresses)
-                : "IPv4: non disponibile");
-        }
-        catch
-        {
-            lines.Add("IPv4: non disponibile");
-        }
-
-        return string.Join(Environment.NewLine, lines);
-    }
-
-    private static string GetDefaultDbInstanceHost()
-    {
-        try
-        {
-            var firstIpv4 = Dns.GetHostAddresses(Dns.GetHostName())
-                .FirstOrDefault(address => address.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(address));
-
-            if (firstIpv4 != null)
-            {
-                return firstIpv4.ToString();
-            }
-        }
-        catch
-        {
-        }
-
-        return Environment.MachineName;
     }
 
     public async Task TrainYoloAsync(
@@ -1832,11 +1858,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         Action<string>? onCompleted = null,
         Action<string>? onFailed = null)
     {
-        var datasetPath = _workspaceService.GetYoloDatasetPath(SelectedProjectName);
+        var trainingClass = SelectedCropClass.Trim().ToLowerInvariant();
+        var datasetPath = _workspaceService.GetYoloDatasetPath(SelectedProjectName, trainingClass);
         var dataYamlPath = Path.Combine(datasetPath, "data.yaml");
         if (!File.Exists(dataYamlPath))
         {
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Dataset YOLO non trovato. Crea prima il dataset.");
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Dataset YOLO non trovato. Crea prima il dataset.");
             YoloStatusText = "Dataset non pronto";
             onFailed?.Invoke("Dataset non pronto.");
             return;
@@ -1851,8 +1878,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             ImageSize = 960,
             Batch = 6
         };
-        YoloStatusText = $"Training YOLO su {SelectedProjectName} | modello {SelectedYoloModel} | profilo {trainingProfile.Name}";
-        AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Training YOLO avviato con modello {SelectedYoloModel} | profilo {trainingProfile.Name}...");
+        YoloStatusText = $"Training YOLO su {SelectedProjectName}/{trainingClass} | modello {SelectedYoloModel} | profilo {trainingProfile.Name}";
+        AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Training YOLO avviato con modello {SelectedYoloModel} | profilo {trainingProfile.Name}...");
 
         var progress = new Progress<YoloTrainingProgress>(progressUpdate =>
         {
@@ -1862,16 +1889,16 @@ public sealed class MainWindowViewModel : ViewModelBase
             }
 
             YoloStatusText = $"[{progressUpdate.Source}] {progressUpdate.RawLine}";
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] YOLO/{progressUpdate.Source}: {progressUpdate.RawLine}");
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] YOLO/{progressUpdate.Source}: {progressUpdate.RawLine}");
             onProgress?.Invoke(progressUpdate);
         });
 
         try
         {
             var result = await _yoloTrainingService.TrainAsync(
-                SelectedProjectName,
+                $"{SelectedProjectName}_{trainingClass}",
                 dataYamlPath,
-                _workspaceService.GetYoloProjectPath(SelectedProjectName),
+                Path.GetDirectoryName(datasetPath)!,
                 SelectedYoloModel,
                 trainingProfile.Epochs,
                 trainingProfile.ImageSize,
@@ -1881,7 +1908,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (result.ExitCode != 0)
             {
                 YoloStatusText = $"Training YOLO fallito | Log: {result.TrainLogPath}";
-                AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Training YOLO fallito. Log: {result.TrainLogPath}");
+                AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Training YOLO fallito. Log: {result.TrainLogPath}");
                 onFailed?.Invoke($"Log: {result.TrainLogPath}");
                 return;
             }
@@ -1889,10 +1916,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             YoloStatusText = string.IsNullOrWhiteSpace(result.OnnxModelPath)
                 ? $"Training completato: {result.RunFolder}"
                 : $"Training completato: {result.OnnxModelPath}";
-            AdbCaptureTab.SetStatusMessage(
-                string.IsNullOrWhiteSpace(result.OnnxModelPath)
-                    ? $"[{SelectedProjectName}] Training YOLO completato: {result.RunFolder} | Log: {result.TrainLogPath}"
-                    : $"[{SelectedProjectName}] Training YOLO completato: {result.OnnxModelPath} | Log: {result.TrainLogPath}");
+                AdbCaptureTab.SetStatusMessage(
+                    string.IsNullOrWhiteSpace(result.OnnxModelPath)
+                    ? $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.RunFolder} | Log: {result.TrainLogPath}"
+                    : $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.OnnxModelPath} | Log: {result.TrainLogPath}");
             onCompleted?.Invoke(string.IsNullOrWhiteSpace(result.OnnxModelPath)
                 ? $"Run: {result.RunFolder}"
                 : $"ONNX: {result.OnnxModelPath}");
@@ -1900,7 +1927,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         catch (Exception ex)
         {
             YoloStatusText = ex.Message;
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}] Errore training YOLO: {ex.Message}");
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Errore training YOLO: {ex.Message}");
             onFailed?.Invoke(ex.Message);
         }
     }
@@ -1923,6 +1950,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             _isApplyingProjectClasses = false;
         }
 
+        RefreshActiveProjectClasses();
         OnPropertyChanged(nameof(ActiveProjectClassesSummary));
     }
 
@@ -1956,7 +1984,43 @@ public sealed class MainWindowViewModel : ViewModelBase
             SelectedProjectName,
             ProjectClassOptions.Where(option => option.IsSelected).Select(option => option.Name));
 
+        if (!ProjectClassOptions.Any(option =>
+                option.IsSelected &&
+                string.Equals(option.Name, SelectedCropClass, StringComparison.OrdinalIgnoreCase)))
+        {
+            var fallbackClass = ProjectClassOptions.FirstOrDefault(option => option.IsSelected)?.Name;
+            if (!string.IsNullOrWhiteSpace(fallbackClass))
+            {
+                SelectedCropClass = fallbackClass;
+            }
+        }
+
+        RefreshActiveProjectClasses();
+        SaveSelectedCropClassForCurrentProject();
         OnPropertyChanged(nameof(ActiveProjectClassesSummary));
         StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary}";
+    }
+
+    private void RefreshActiveProjectClasses()
+    {
+        var activeNames = ProjectClassOptions
+            .Where(option => option.IsSelected)
+            .Select(option => option.Name)
+            .ToList();
+
+        ActiveProjectClasses.Clear();
+        foreach (var activeName in activeNames)
+        {
+            ActiveProjectClasses.Add(activeName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(SelectedCropClass) &&
+            activeNames.Contains(SelectedCropClass, StringComparer.OrdinalIgnoreCase) &&
+            !ActiveProjectClasses.Contains(SelectedCropClass))
+        {
+            ActiveProjectClasses.Add(SelectedCropClass);
+        }
+
+        OnPropertyChanged(nameof(ActiveProjectClassesSummary));
     }
 }

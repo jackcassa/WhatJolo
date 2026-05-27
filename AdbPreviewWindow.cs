@@ -11,6 +11,7 @@ namespace WhatJolo;
 
 internal sealed class AdbPreviewWindow : Window
 {
+    private readonly Button _saveSelectionButton;
     private readonly ScrollViewer _scrollViewer;
     private readonly Grid _previewHost;
     private readonly Border _previewBorder;
@@ -58,13 +59,31 @@ internal sealed class AdbPreviewWindow : Window
         Grid.SetRow(headerBorder, 0);
 
         var headerStack = new StackPanel();
-        headerStack.Children.Add(new TextBlock
+        var headerTop = new DockPanel();
+
+        var titleText = new TextBlock
         {
             Text = "Preview ADB",
             FontSize = 18,
             FontWeight = FontWeights.Bold,
             Foreground = new SolidColorBrush(Color.FromRgb(255, 212, 0))
-        });
+        };
+        DockPanel.SetDock(titleText, Dock.Left);
+        headerTop.Children.Add(titleText);
+
+        _saveSelectionButton = new Button
+        {
+            Content = "Salva selezione",
+            Padding = new Thickness(12, 6, 12, 6),
+            FontWeight = FontWeights.Bold,
+            IsEnabled = false,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        _saveSelectionButton.Click += SaveSelectionButton_Click;
+        DockPanel.SetDock(_saveSelectionButton, Dock.Right);
+        headerTop.Children.Add(_saveSelectionButton);
+
+        headerStack.Children.Add(headerTop);
 
         var capturePathText = new TextBlock
         {
@@ -192,9 +211,12 @@ internal sealed class AdbPreviewWindow : Window
 
     public Int32Rect? SelectedPixelRect => _selectionController.SelectedPixelRect;
 
+    public event EventHandler? SaveSelectionRequested;
+
     public void ClearSelection()
     {
         _selectionController.ClearSelection();
+        _saveSelectionButton.IsEnabled = SelectedPixelRect.HasValue;
     }
 
     private void PreviewSurface_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -338,6 +360,12 @@ internal sealed class AdbPreviewWindow : Window
     private void SelectionCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         _selectionController.HandleMouseUp(e);
+        _saveSelectionButton.IsEnabled = SelectedPixelRect.HasValue;
+    }
+
+    private void SaveSelectionButton_Click(object sender, RoutedEventArgs e)
+    {
+        SaveSelectionRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void UpdateFitZoom()

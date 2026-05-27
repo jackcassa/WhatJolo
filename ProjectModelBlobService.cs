@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 
 namespace WhatJolo;
 
-internal sealed class ProjectModelBlobService
+public sealed class ProjectModelBlobService
 {
     private readonly ProjectWorkspaceService _workspaceService = new();
 
@@ -13,7 +13,7 @@ internal sealed class ProjectModelBlobService
     {
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
         var normalizedClassName = NormalizeClassName(className);
-        var onnxPath = _workspaceService.FindLatestYoloOnnxPath(normalizedProjectName);
+        var onnxPath = _workspaceService.FindLatestYoloOnnxPath(normalizedProjectName, normalizedClassName);
         if (string.IsNullOrWhiteSpace(onnxPath) || !File.Exists(onnxPath))
         {
             throw new FileNotFoundException($"best.onnx non trovato per il progetto {normalizedProjectName}, classe {normalizedClassName}.");
@@ -149,7 +149,7 @@ internal sealed class ProjectModelBlobService
 
         var outputPath = Path.Combine(tempFolder, string.IsNullOrWhiteSpace(modelFileName) ? "best.onnx" : modelFileName);
         await File.WriteAllBytesAsync(outputPath, originalBytes);
-        WriteProjectLabelsBesideModel(normalizedProjectName, outputPath);
+        WriteProjectLabelsBesideModel(normalizedProjectName, normalizedClassName, outputPath);
 
         return new ProjectModelBlobRestoreResult(
             normalizedProjectName,
@@ -182,9 +182,9 @@ internal sealed class ProjectModelBlobService
         return outputStream.ToArray();
     }
 
-    private void WriteProjectLabelsBesideModel(string projectName, string modelPath)
+    private void WriteProjectLabelsBesideModel(string projectName, string className, string modelPath)
     {
-        var classesPath = Path.Combine(_workspaceService.GetYoloDatasetPath(projectName), "classes.txt");
+        var classesPath = Path.Combine(_workspaceService.GetYoloDatasetPath(projectName, className), "classes.txt");
         if (!File.Exists(classesPath))
         {
             return;

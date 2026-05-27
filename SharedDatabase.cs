@@ -5,7 +5,7 @@ using Npgsql;
 
 namespace WhatJolo;
 
-internal static class SharedDatabase
+public static class SharedDatabase
 {
     private static readonly object InitLock = new();
     private static bool _initialized;
@@ -14,6 +14,23 @@ internal static class SharedDatabase
 
     public static string GetProjectDirectoryPath()
     {
+        var current = new DirectoryInfo(Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..")));
+
+        while (current != null)
+        {
+            var solutionPath = Path.Combine(current.FullName, "WhatJolo.slnx");
+            if (File.Exists(solutionPath))
+            {
+                return current.FullName;
+            }
+
+            current = current.Parent;
+        }
+
         return Path.GetFullPath(Path.Combine(
             AppContext.BaseDirectory,
             "..",
@@ -141,6 +158,12 @@ internal static class SharedDatabase
 
         var builder = new NpgsqlConnectionStringBuilder(GetPostgresConnectionString());
         return $"PostgreSQL | Host={builder.Host} | Port={builder.Port} | Database={builder.Database} | User={builder.Username}";
+    }
+
+    public static string GetConnectionPreview()
+    {
+        var settings = LoadPostgresSettings();
+        return $"Host={settings.Host};Port={settings.Port};Database={settings.Database};Username={settings.Username};Password={settings.Password}";
     }
 
     public static void EnsureDatabaseReady(Action<string>? progress = null)

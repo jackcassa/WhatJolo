@@ -654,19 +654,19 @@ public sealed class UltraTabViewModel : ViewModelBase
             return $"DB: best.onnx salvato nel database remoto per classe '{_currentClassName}' (scompattato in temp alla detection).";
         }
 
-        var latestOnnxPath = _workspaceService.FindLatestYoloOnnxPath(_currentProjectName);
+        var latestOnnxPath = _workspaceService.FindLatestYoloOnnxPath(_currentProjectName, _currentClassName);
         if (!string.IsNullOrWhiteSpace(latestOnnxPath))
         {
             return latestOnnxPath;
         }
 
-        var latestRunPath = _workspaceService.FindLatestYoloRunPath(_currentProjectName);
+        var latestRunPath = _workspaceService.FindLatestYoloRunPath(_currentProjectName, _currentClassName);
         if (!string.IsNullOrWhiteSpace(latestRunPath))
         {
             return Path.Combine(latestRunPath, "weights", "best.onnx");
         }
 
-        return Path.Combine(_workspaceService.GetYoloRunsPath(_currentProjectName), BuildSafeProjectName(_currentProjectName), "weights", "best.onnx");
+        return Path.Combine(_workspaceService.GetYoloRunsPath(_currentProjectName, _currentClassName), $"{BuildSafeProjectName(_currentProjectName)}_{BuildSafeProjectName(_currentClassName)}", "weights", "best.onnx");
     }
 
     private async Task<string> ResolveDetectionModelPathAsync()
@@ -690,7 +690,7 @@ public sealed class UltraTabViewModel : ViewModelBase
 
     private async Task<string?> TryExportMissingOnnxAsync()
     {
-        var latestRunPath = _workspaceService.FindLatestYoloRunPath(_currentProjectName);
+        var latestRunPath = _workspaceService.FindLatestYoloRunPath(_currentProjectName, _currentClassName);
         if (string.IsNullOrWhiteSpace(latestRunPath))
         {
             return null;
@@ -703,8 +703,8 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
 
         StatusText = $"[{_currentProjectName}] best.onnx mancante, provo export da best.pt...";
-        var datasetYamlPath = Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName), "data.yaml");
-        var exportedPath = await _yoloTrainingService.ExportOnnxAsync(bestPtPath, _workspaceService.GetYoloProjectPath(_currentProjectName), datasetYamlPath);
+        var datasetYamlPath = Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName, _currentClassName), "data.yaml");
+        var exportedPath = await _yoloTrainingService.ExportOnnxAsync(bestPtPath, Path.GetDirectoryName(Path.GetDirectoryName(datasetYamlPath)!)!, datasetYamlPath);
         if (!string.IsNullOrWhiteSpace(exportedPath) && File.Exists(exportedPath))
         {
             StatusText = $"[{_currentProjectName}] Export ONNX automatico completato: {exportedPath}";
@@ -723,7 +723,7 @@ public sealed class UltraTabViewModel : ViewModelBase
             return new List<GroundTruthBox>();
         }
 
-        var classesPath = Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName), "classes.txt");
+        var classesPath = Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName, _currentClassName), "classes.txt");
         var classes = File.Exists(classesPath)
             ? File.ReadAllLines(classesPath)
                 .Select(static line => line.Trim())
@@ -840,12 +840,12 @@ public sealed class UltraTabViewModel : ViewModelBase
 
         if (imagePath.StartsWith(trainFolder, StringComparison.OrdinalIgnoreCase))
         {
-            return Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName), "labels", "train", fileNameWithoutExtension + ".txt");
+            return Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName, _currentClassName), "labels", "train", fileNameWithoutExtension + ".txt");
         }
 
         if (imagePath.StartsWith(valFolder, StringComparison.OrdinalIgnoreCase))
         {
-            return Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName), "labels", "val", fileNameWithoutExtension + ".txt");
+            return Path.Combine(_workspaceService.GetYoloDatasetPath(_currentProjectName, _currentClassName), "labels", "val", fileNameWithoutExtension + ".txt");
         }
 
         return null;

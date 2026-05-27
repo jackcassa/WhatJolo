@@ -3,7 +3,7 @@ using System.IO;
 
 namespace WhatJolo;
 
-internal sealed class AdbService
+public sealed class AdbService
 {
     public string AdbExecutablePath { get; }
 

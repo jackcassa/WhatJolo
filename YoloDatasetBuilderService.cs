@@ -31,9 +31,16 @@ internal sealed class YoloDatasetBuilderService
             throw new InvalidOperationException("Nessuna classe attiva selezionata per il progetto.");
         }
 
+        if (normalizedClasses.Length != 1)
+        {
+            throw new InvalidOperationException("Il dataset YOLO ora viene creato per una sola classe alla volta.");
+        }
+
+        var targetClassName = normalizedClasses[0];
+
         var records = await _annotationCropDbService.GetProjectCropsAsync(projectName, normalizedClasses);
 
-        var datasetFolder = _workspaceService.CreateYoloDatasetStructure(projectName, normalizedClasses);
+        var datasetFolder = _workspaceService.CreateYoloDatasetStructure(projectName, targetClassName);
         var imagesTrainFolder = Path.Combine(datasetFolder, "images", "train");
         var imagesValFolder = Path.Combine(datasetFolder, "images", "val");
         var labelsTrainFolder = Path.Combine(datasetFolder, "labels", "train");
@@ -182,13 +189,20 @@ internal sealed class YoloDatasetBuilderService
             throw new InvalidOperationException("Nessuna classe attiva selezionata per il progetto.");
         }
 
+        if (normalizedClasses.Length != 1)
+        {
+            throw new InvalidOperationException("Il dataset test YOLO ora viene creato per una sola classe alla volta.");
+        }
+
+        var targetClassName = normalizedClasses[0];
+
         var records = await _annotationCropDbService.GetProjectCropsAsync(projectName, normalizedClasses);
         if (records.Count == 0)
         {
             throw new InvalidOperationException("Nessuna annotazione trovata nel DB per il progetto corrente.");
         }
 
-        var datasetFolder = _workspaceService.CreateYoloDatasetStructure(projectName, normalizedClasses);
+        var datasetFolder = _workspaceService.CreateYoloDatasetStructure(projectName, targetClassName);
         var imagesTestFolder = Path.Combine(datasetFolder, "images", "test");
         var labelsTestFolder = Path.Combine(datasetFolder, "labels", "test");
         var imageMapPath = Path.Combine(datasetFolder, "image_map.tsv");

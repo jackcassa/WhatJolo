@@ -1,6 +1,6 @@
 namespace WhatJolo;
 
-internal sealed class PostgresConnectionSettings
+public sealed class PostgresConnectionSettings
 {
     public string Host { get; set; } = string.Empty;
     public int Port { get; set; } = 5432;

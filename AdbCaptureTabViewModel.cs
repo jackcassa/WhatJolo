@@ -17,6 +17,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     private string _lastCapturePath;
     private BitmapImage? _latestScreenshotPreview;
     private string? _selectedDeviceSerial;
+    private CapturedImageItem? _selectedCapturedImage;
     private SavedCropItem? _selectedSavedCrop;
     private SavedCropItem? _selectedVariationCrop;
     private string _currentProjectName;
@@ -32,6 +33,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         _lastCapturePath = "Nessuna cattura eseguita.";
         _currentProjectName = _workspaceService.EnsureProject("Default");
         ConnectedDevices = new ObservableCollection<string>();
+        CapturedImages = new ObservableCollection<CapturedImageItem>();
         SavedCrops = new ObservableCollection<SavedCropItem>();
         VariationCrops = new ObservableCollection<SavedCropItem>();
         StatusLog = new ObservableCollection<string>();
@@ -42,12 +44,15 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     public string AdbExecutablePath { get; }
 
     public ObservableCollection<string> ConnectedDevices { get; }
+    public ObservableCollection<CapturedImageItem> CapturedImages { get; }
     public ObservableCollection<SavedCropItem> SavedCrops { get; }
     public ObservableCollection<SavedCropItem> VariationCrops { get; }
     public ObservableCollection<string> StatusLog { get; }
+    public int CapturedImageCount => CapturedImages.Count;
     public int SavedCropCount => SavedCrops.Count;
     public int VariationCropCount => VariationCrops.Count;
     public string StatusLogText => string.Join(Environment.NewLine, StatusLog);
+    public bool IsLoadingCapturedImages { get; private set; }
 
     public string AdbStatusText
     {
@@ -83,6 +88,12 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     {
         get => _selectedDeviceSerial;
         set => SetField(ref _selectedDeviceSerial, value);
+    }
+
+    public CapturedImageItem? SelectedCapturedImage
+    {
+        get => _selectedCapturedImage;
+        set => SetField(ref _selectedCapturedImage, value);
     }
 
     public SavedCropItem? SelectedSavedCrop
@@ -202,6 +213,8 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
             await AlignCurrentProjectAsync("capture");
             LastCapturePath = outputPath;
             LatestScreenshotPreview = CreateBitmapImage(pngBytes);
+            await LoadCapturedImagesAsync();
+            SelectedCapturedImage = CapturedImages.FirstOrDefault(item => string.Equals(item.FilePath, outputPath, StringComparison.OrdinalIgnoreCase));
             AdbStatusText = $"[{CurrentProjectName}] Acquisizione completata su {SelectedDeviceSerial}: {pngBytes.Length:N0} byte PNG lossless.";
         }
         catch (Exception ex)
@@ -230,12 +243,70 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         await AlignCurrentProjectAsync(safePrefix);
         LastCapturePath = outputPath;
         LatestScreenshotPreview = CreateBitmapImage(pngBytes);
+        await LoadCapturedImagesAsync();
+        SelectedCapturedImage = CapturedImages.FirstOrDefault(item => string.Equals(item.FilePath, outputPath, StringComparison.OrdinalIgnoreCase));
         AdbStatusText = $"[{CurrentProjectName}] {sourceLabel}: acquisizione completata ({pngBytes.Length:N0} byte PNG).";
     }
 
     public string GetCapturesFolderPath()
     {
         return _workspaceService.GetCapturesPath(CurrentProjectName);
+    }
+
+    public async Task LoadCapturedImagesAsync()
+    {
+        IsLoadingCapturedImages = true;
+        try
+        {
+            CapturedImages.Clear();
+
+            var capturesFolder = GetCapturesFolderPath();
+            if (!Directory.Exists(capturesFolder))
+            {
+                SelectedCapturedImage = null;
+                OnPropertyChanged(nameof(CapturedImageCount));
+                return;
+            }
+
+            var captureFiles = Directory
+                .EnumerateFiles(capturesFolder, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(static filePath => IsSupportedImagePath(filePath))
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .ToArray();
+
+            foreach (var captureFile in captureFiles)
+            {
+                CapturedImages.Add(new CapturedImageItem(
+                    captureFile,
+                    Path.GetFileName(captureFile),
+                    CreateBitmapImage(await File.ReadAllBytesAsync(captureFile))));
+            }
+
+            SelectedCapturedImage = CapturedImages.FirstOrDefault(item =>
+                string.Equals(item.FilePath, LastCapturePath, StringComparison.OrdinalIgnoreCase))
+                ?? CapturedImages.FirstOrDefault();
+
+            OnPropertyChanged(nameof(CapturedImageCount));
+        }
+        finally
+        {
+            IsLoadingCapturedImages = false;
+        }
+    }
+
+    public async Task<bool> LoadSelectedCaptureAsync()
+    {
+        var selectedItem = SelectedCapturedImage;
+        if (selectedItem == null || !File.Exists(selectedItem.FilePath))
+        {
+            AdbStatusText = $"[{CurrentProjectName}] Nessuna immagine acquisita selezionata.";
+            return false;
+        }
+
+        LastCapturePath = selectedItem.FilePath;
+        LatestScreenshotPreview = CreateBitmapImage(await File.ReadAllBytesAsync(selectedItem.FilePath));
+        AdbStatusText = $"[{CurrentProjectName}] Capture caricata per la selezione: {selectedItem.FileName}";
+        return true;
     }
 
     public async Task LoadSavedCropsAsync(string cropClass)
@@ -394,6 +465,39 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         return createdCropPaths.Count;
     }
 
+    public async Task<int> GenerateVariationsForCropPathsAsync(string cropClass, IEnumerable<string> cropPaths, int countPerCrop = 10)
+    {
+        var safePaths = cropPaths
+            .Where(static path => !string.IsNullOrWhiteSpace(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (safePaths.Length == 0)
+        {
+            AdbStatusText = $"[{CurrentProjectName}] Nessuna crop selezionata per generare variazioni multiple.";
+            return 0;
+        }
+
+        var totalGenerated = 0;
+        foreach (var cropPath in safePaths)
+        {
+            var sourceRecord = await _annotationCropDbService.GetProjectCropByImagePathAsync(CurrentProjectName, cropPath);
+            if (sourceRecord == null)
+            {
+                continue;
+            }
+
+            var createdCropPaths = await _cropVariationService.GenerateVariationsAsync(sourceRecord, countPerCrop);
+            totalGenerated += createdCropPaths.Count;
+        }
+
+        await AlignCurrentProjectAsync("variation-batch");
+        await LoadSavedCropsAsync(cropClass);
+        SelectedVariationCrop = VariationCrops.FirstOrDefault();
+        AdbStatusText = $"[{CurrentProjectName}] Variazioni generate su {safePaths.Length} crop: {totalGenerated} | Classe: {cropClass}.";
+        return totalGenerated;
+    }
+
     public BitmapSource? CreateSelectionPreview(Int32Rect selectionRect)
     {
         if (LatestScreenshotPreview == null || selectionRect.Width <= 0 || selectionRect.Height <= 0)
@@ -413,6 +517,8 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     {
         CurrentProjectName = _workspaceService.EnsureProject(projectName);
         LastCapturePath = "Nessuna cattura eseguita.";
+        LatestScreenshotPreview = null;
+        await LoadCapturedImagesAsync();
         await LoadSavedCropsAsync(cropClass);
         StatusLog.Clear();
         AdbStatusText = $"Progetto corrente: {CurrentProjectName}";
@@ -455,6 +561,16 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
             record.IsVariation);
     }
 
+    private static bool IsSupportedImagePath(string filePath)
+    {
+        var extension = Path.GetExtension(filePath);
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".bmp", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".webp", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void AppendLog(string message)
     {
         var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
@@ -469,3 +585,4 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
 }
 
 public sealed record SavedCropItem(string FilePath, string FileName, string LabelName, BitmapImage PreviewImage, bool IsVariation);
+public sealed record CapturedImageItem(string FilePath, string FileName, BitmapImage PreviewImage);

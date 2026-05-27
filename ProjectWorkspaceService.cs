@@ -3,7 +3,7 @@ using System.Data.Common;
 
 namespace WhatJolo;
 
-internal sealed class ProjectWorkspaceService
+public sealed class ProjectWorkspaceService
 {
     public string ProjectsRootPath { get; }
     public string YoloProjectsRootPath { get; }
@@ -93,8 +93,25 @@ internal sealed class ProjectWorkspaceService
 
     public string CreateYoloDatasetStructure(string projectName, IEnumerable<string> activeClasses)
     {
+        var classes = activeClasses
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (classes.Count != 1)
+        {
+            throw new InvalidOperationException("Il training YOLO ora supporta una sola classe alla volta.");
+        }
+
+        return CreateYoloDatasetStructure(projectName, classes[0]);
+    }
+
+    public string CreateYoloDatasetStructure(string projectName, string className)
+    {
         var normalizedProjectName = EnsureProject(projectName);
-        var projectPath = GetYoloProjectPath(normalizedProjectName);
+        var normalizedClassName = NormalizeClassName(className);
+        var projectPath = GetYoloClassProjectPath(normalizedProjectName, normalizedClassName);
         var datasetPath = Path.Combine(projectPath, "dataset");
         var imagesTrainPath = Path.Combine(datasetPath, "images", "train");
         var imagesValPath = Path.Combine(datasetPath, "images", "val");
@@ -110,12 +127,6 @@ internal sealed class ProjectWorkspaceService
         Directory.CreateDirectory(labelsValPath);
         Directory.CreateDirectory(labelsTestPath);
 
-        var classes = activeClasses
-            .Where(static name => !string.IsNullOrWhiteSpace(name))
-            .Select(static name => name.Trim().ToLowerInvariant())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
         var yamlPath = Path.Combine(datasetPath, "data.yaml");
         var yamlLines = new List<string>
         {
@@ -123,8 +134,8 @@ internal sealed class ProjectWorkspaceService
             "train: images/train",
             "val: images/val",
             "test: images/test",
-            $"nc: {classes.Count}",
-            $"names: [{string.Join(", ", classes.Select(static name => $"'{name}'"))}]"
+            "nc: 1",
+            $"names: ['{normalizedClassName}']"
         };
         File.WriteAllLines(yamlPath, yamlLines);
 
@@ -133,7 +144,12 @@ internal sealed class ProjectWorkspaceService
 
     public string GetYoloDatasetPath(string projectName)
     {
-        return Path.Combine(GetYoloProjectPath(EnsureProject(projectName)), "dataset");
+        return GetYoloDatasetPath(projectName, "cerca");
+    }
+
+    public string GetYoloDatasetPath(string projectName, string className)
+    {
+        return Path.Combine(GetYoloClassProjectPath(EnsureProject(projectName), NormalizeClassName(className)), "dataset");
     }
 
     public string GetYoloProjectPath(string projectName)
@@ -154,7 +170,12 @@ internal sealed class ProjectWorkspaceService
 
     public string GetYoloRunsPath(string projectName)
     {
-        var projectPath = GetYoloProjectPath(projectName);
+        return GetYoloRunsPath(projectName, "cerca");
+    }
+
+    public string GetYoloRunsPath(string projectName, string className)
+    {
+        var projectPath = GetYoloClassProjectPath(projectName, className);
         var runsPath = Path.Combine(projectPath, "runs");
         Directory.CreateDirectory(runsPath);
         return runsPath;
@@ -162,15 +183,21 @@ internal sealed class ProjectWorkspaceService
 
     public string? FindLatestYoloRunPath(string projectName)
     {
+        return FindLatestYoloRunPath(projectName, "cerca");
+    }
+
+    public string? FindLatestYoloRunPath(string projectName, string className)
+    {
         var safeProjectName = NormalizeProjectName(projectName);
-        var runsPath = GetYoloRunsPath(projectName);
+        var safeClassName = NormalizeClassName(className);
+        var runsPath = GetYoloRunsPath(projectName, safeClassName);
         if (!Directory.Exists(runsPath))
         {
             return null;
         }
 
         return Directory
-            .EnumerateDirectories(runsPath, safeProjectName + "*", SearchOption.TopDirectoryOnly)
+            .EnumerateDirectories(runsPath, $"{safeProjectName}_{safeClassName}*", SearchOption.TopDirectoryOnly)
             .Select(path => new
             {
                 Path = path,
@@ -183,7 +210,12 @@ internal sealed class ProjectWorkspaceService
 
     public string? FindLatestYoloCheckpointPath(string projectName)
     {
-        var latestRunPath = FindLatestYoloRunPath(projectName);
+        return FindLatestYoloCheckpointPath(projectName, "cerca");
+    }
+
+    public string? FindLatestYoloCheckpointPath(string projectName, string className)
+    {
+        var latestRunPath = FindLatestYoloRunPath(projectName, className);
         if (string.IsNullOrWhiteSpace(latestRunPath))
         {
             return null;
@@ -195,7 +227,12 @@ internal sealed class ProjectWorkspaceService
 
     public string? FindLatestYoloOnnxPath(string projectName)
     {
-        var latestRunPath = FindLatestYoloRunPath(projectName);
+        return FindLatestYoloOnnxPath(projectName, "cerca");
+    }
+
+    public string? FindLatestYoloOnnxPath(string projectName, string className)
+    {
+        var latestRunPath = FindLatestYoloRunPath(projectName, className);
         if (string.IsNullOrWhiteSpace(latestRunPath))
         {
             return null;
@@ -207,7 +244,12 @@ internal sealed class ProjectWorkspaceService
 
     public string? ResetLatestYoloRun(string projectName)
     {
-        var latestRunPath = FindLatestYoloRunPath(projectName);
+        return ResetLatestYoloRun(projectName, "cerca");
+    }
+
+    public string? ResetLatestYoloRun(string projectName, string className)
+    {
+        var latestRunPath = FindLatestYoloRunPath(projectName, className);
         if (string.IsNullOrWhiteSpace(latestRunPath) || !Directory.Exists(latestRunPath))
         {
             return null;
@@ -261,6 +303,71 @@ internal sealed class ProjectWorkspaceService
         return selectedClasses.Count > 0
             ? selectedClasses
             : safeAvailableClasses;
+    }
+
+    public string? LoadSelectedCropClass(string projectName, IEnumerable<string> availableClasses)
+    {
+        var safeAvailableClasses = availableClasses
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .Select(static name => name.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (safeAvailableClasses.Length == 0 || !SharedDatabase.IsDatabaseConnected())
+        {
+            return null;
+        }
+
+        EnsureProjectInfoTable();
+
+        using var connection = SharedDatabase.CreateConnection();
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT CurrentCropClass
+            FROM ProjectInfo
+            WHERE ProjectName = @ProjectName;
+            """;
+        AddParameter(command, "@ProjectName", EnsureProject(projectName));
+
+        var result = command.ExecuteScalar() as string;
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            return null;
+        }
+
+        var normalizedClass = result.Trim().ToLowerInvariant();
+        return safeAvailableClasses.Contains(normalizedClass, StringComparer.OrdinalIgnoreCase)
+            ? normalizedClass
+            : null;
+    }
+
+    public void SaveSelectedCropClass(string projectName, string className)
+    {
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            return;
+        }
+
+        var normalizedProjectName = EnsureProject(projectName);
+        var normalizedClassName = NormalizeClassName(className);
+
+        EnsureProjectInfoTable();
+
+        using var connection = SharedDatabase.CreateConnection();
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE ProjectInfo
+            SET CurrentCropClass = @CurrentCropClass,
+                UpdatedAtUtc = CURRENT_TIMESTAMP
+            WHERE ProjectName = @ProjectName;
+            """;
+        AddParameter(command, "@ProjectName", normalizedProjectName);
+        AddParameter(command, "@CurrentCropClass", normalizedClassName);
+        command.ExecuteNonQuery();
     }
 
     public void SaveActiveClasses(string projectName, IEnumerable<string> activeClasses)
@@ -326,6 +433,23 @@ internal sealed class ProjectWorkspaceService
         return string.IsNullOrWhiteSpace(sanitized) ? "Default" : sanitized;
     }
 
+    private static string NormalizeClassName(string? className)
+    {
+        var rawName = string.IsNullOrWhiteSpace(className) ? "cerca" : className.Trim().ToLowerInvariant();
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var sanitized = new string(rawName.Select(ch => invalidChars.Contains(ch) ? '_' : ch).ToArray()).Trim();
+        return string.IsNullOrWhiteSpace(sanitized) ? "cerca" : sanitized;
+    }
+
+    private string GetYoloClassProjectPath(string projectName, string className)
+    {
+        var normalizedProjectName = NormalizeProjectName(projectName);
+        var normalizedClassName = NormalizeClassName(className);
+        var projectPath = Path.Combine(GetYoloProjectPath(normalizedProjectName), "classes", normalizedClassName);
+        Directory.CreateDirectory(projectPath);
+        return projectPath;
+    }
+
     private static DateTime GetRunTimestamp(string runPath)
     {
         var weightsFolder = Path.Combine(runPath, "weights");
@@ -381,10 +505,14 @@ internal sealed class ProjectWorkspaceService
                 ProjectName TEXT NOT NULL,
                 ProjectRootPath TEXT NOT NULL,
                 MachineName TEXT NOT NULL,
+                CurrentCropClass TEXT NULL,
                 CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(ProjectName)
             );
+
+            ALTER TABLE ProjectInfo
+                ADD COLUMN IF NOT EXISTS CurrentCropClass TEXT NULL;
 
             CREATE INDEX IF NOT EXISTS IX_ProjectInfo_ProjectName
                 ON ProjectInfo(ProjectName);
@@ -404,6 +532,7 @@ internal sealed class ProjectWorkspaceService
                 ProjectName,
                 ProjectRootPath,
                 MachineName,
+                CurrentCropClass,
                 CreatedAtUtc,
                 UpdatedAtUtc
             )
@@ -412,6 +541,7 @@ internal sealed class ProjectWorkspaceService
                 @ProjectName,
                 @ProjectRootPath,
                 @MachineName,
+                @CurrentCropClass,
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
@@ -423,6 +553,7 @@ internal sealed class ProjectWorkspaceService
         AddParameter(command, "@ProjectName", projectName);
         AddParameter(command, "@ProjectRootPath", projectRootPath);
         AddParameter(command, "@MachineName", Environment.MachineName);
+        AddParameter(command, "@CurrentCropClass", "cerca");
         command.ExecuteNonQuery();
     }
 

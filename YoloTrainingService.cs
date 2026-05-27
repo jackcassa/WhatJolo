@@ -112,6 +112,8 @@ internal sealed class YoloTrainingService
             throw new InvalidOperationException("Non trovo yolo/ultralytics installato. Verifica il runtime YoloRuntime.");
         }
 
+        var trainingDevice = await DetectTrainingDeviceAsync(command, cancellationToken);
+
         var runsFolder = Path.Combine(workingDirectory, "runs");
         Directory.CreateDirectory(runsFolder);
         var safeProjectName = BuildSafeProjectName(projectName);
@@ -131,7 +133,7 @@ internal sealed class YoloTrainingService
               " epochs=" + epochs +
               " imgsz=" + imageSize +
               " batch=" + batch +
-              " device=0" +
+              " device=" + trainingDevice +
               " project=" + QuoteArg(runsFolder) +
               " name=" + QuoteArg(effectiveRunName) +
               " exist_ok=true"
@@ -142,7 +144,7 @@ internal sealed class YoloTrainingService
               " epochs=" + epochs +
               " imgsz=" + imageSize +
               " batch=" + batch +
-              " device=0" +
+              " device=" + trainingDevice +
               " project=" + QuoteArg(runsFolder) +
               " name=" + QuoteArg(effectiveRunName);
 
@@ -152,7 +154,8 @@ internal sealed class YoloTrainingService
         Report(progress, new YoloTrainingProgress("Preparazione training YOLO...", null, null, "info"));
         Report(progress, new YoloTrainingProgress("Runtime: " + command.FileName, null, null, "info"));
         Report(progress, new YoloTrainingProgress("Modello: " + modelName, null, null, "info"));
-        Report(progress, new YoloTrainingProgress($"Parametri: epochs={epochs} imgsz={imageSize} batch={batch} device=0", null, null, "info"));
+        Report(progress, new YoloTrainingProgress($"Device training scelto: {trainingDevice}", null, null, "info"));
+        Report(progress, new YoloTrainingProgress($"Parametri: epochs={epochs} imgsz={imageSize} batch={batch} device={trainingDevice}", null, null, "info"));
         Report(progress, new YoloTrainingProgress(resumeTraining
             ? "Continua training da last.pt come pesi iniziali"
             : "Training nuovo da zero", null, null, "info"));
@@ -192,6 +195,7 @@ internal sealed class YoloTrainingService
             $"Epochs: {epochs}{Environment.NewLine}" +
             $"ImageSize: {imageSize}{Environment.NewLine}" +
             $"Batch: {batch}{Environment.NewLine}" +
+            $"Device: {trainingDevice}{Environment.NewLine}" +
             $"Resume: {resumeTraining}{Environment.NewLine}" +
             $"Checkpoint: {lastCheckpointPath}{Environment.NewLine}" +
             $"RunName: {effectiveRunName}{Environment.NewLine}" +
@@ -270,6 +274,8 @@ internal sealed class YoloTrainingService
             throw new InvalidOperationException("Non trovo yolo/ultralytics installato. Verifica il runtime YoloRuntime.");
         }
 
+        var trainingDevice = await DetectTrainingDeviceAsync(command, cancellationToken);
+
         var runsFolder = Path.Combine(workingDirectory, "runs");
         Directory.CreateDirectory(runsFolder);
         var safeProjectName = BuildSafeProjectName(projectName);
@@ -294,6 +300,7 @@ internal sealed class YoloTrainingService
             " model=" + QuoteArg(bestCheckpointPath) +
             " split=test" +
             " imgsz=" + imageSize +
+            " device=" + trainingDevice +
             " project=" + QuoteArg(runsFolder) +
             " name=" + QuoteArg(runName + "_test") +
             " exist_ok=true";
@@ -303,6 +310,7 @@ internal sealed class YoloTrainingService
         var lineLog = new StringBuilder();
         Report(progress, new YoloTrainingProgress("Preparazione test YOLO...", null, null, "info"));
         Report(progress, new YoloTrainingProgress("Runtime: " + command.FileName, null, null, "info"));
+        Report(progress, new YoloTrainingProgress("Device test scelto: " + trainingDevice, null, null, "info"));
         Report(progress, new YoloTrainingProgress("Checkpoint test: " + bestCheckpointPath, null, null, "info"));
         Report(progress, new YoloTrainingProgress("Argomenti: " + arguments.Trim(), null, null, "info"));
         Report(progress, new YoloTrainingProgress("WorkingDir: " + workingDirectory, null, null, "info"));
@@ -313,6 +321,7 @@ internal sealed class YoloTrainingService
             $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] YOLO TEST START{Environment.NewLine}" +
             $"Project: {projectName}{Environment.NewLine}" +
             $"Runtime: {command.FileName}{Environment.NewLine}" +
+            $"Device: {trainingDevice}{Environment.NewLine}" +
             $"Checkpoint: {bestCheckpointPath}{Environment.NewLine}" +
             $"ImageSize: {imageSize}{Environment.NewLine}" +
             $"Arguments: {arguments.Trim()}{Environment.NewLine}" +
@@ -494,6 +503,79 @@ internal sealed class YoloTrainingService
         }
 
         return "\"" + value.Replace("\"", "\\\"") + "\"";
+    }
+
+    private static async Task<string> DetectTrainingDeviceAsync(YoloCommand command, CancellationToken cancellationToken)
+    {
+        var pythonExe = ResolvePythonForCommand(command);
+        if (string.IsNullOrWhiteSpace(pythonExe) || !File.Exists(pythonExe))
+        {
+            return "cpu";
+        }
+
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = pythonExe,
+                Arguments = "-c \"import torch; print('0' if torch.cuda.is_available() else 'cpu')\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
+            }
+        };
+
+        process.Start();
+        var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        var waitTask = process.WaitForExitAsync(cancellationToken);
+        var allTask = Task.WhenAll(outputTask, errorTask, waitTask);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
+        var completed = await Task.WhenAny(allTask, timeoutTask);
+        if (completed == timeoutTask)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+
+            return "cpu";
+        }
+
+        await allTask;
+        var output = (await outputTask).Trim();
+        return string.Equals(output, "0", StringComparison.Ordinal) ? "0" : "cpu";
+    }
+
+    private static string? ResolvePythonForCommand(YoloCommand command)
+    {
+        if (string.IsNullOrWhiteSpace(command.FileName))
+        {
+            return null;
+        }
+
+        if (Path.GetFileName(command.FileName).Equals("python.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            return command.FileName;
+        }
+
+        var directory = Path.GetDirectoryName(command.FileName);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return null;
+        }
+
+        var candidate = Path.Combine(directory, "python.exe");
+        return File.Exists(candidate) ? candidate : null;
     }
 
     private static YoloCommand DetectPreferredYoloCommand()

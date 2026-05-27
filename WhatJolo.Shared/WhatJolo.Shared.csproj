@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.25.1" />
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="System.Drawing.Common" Version="10.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\ViewModelBase.cs" Link="ViewModelBase.cs" />
+    <Compile Include="..\PostgresConnectionSettings.cs" Link="PostgresConnectionSettings.cs" />
+    <Compile Include="..\PostgresDatabaseMigrator.cs" Link="PostgresDatabaseMigrator.cs" />
+    <Compile Include="..\SharedDatabase.cs" Link="SharedDatabase.cs" />
+    <Compile Include="..\ProjectWorkspaceService.cs" Link="ProjectWorkspaceService.cs" />
+    <Compile Include="..\AdbService.cs" Link="AdbService.cs" />
+    <Compile Include="..\ProjectModelBlobService.cs" Link="ProjectModelBlobService.cs" />
+    <Compile Include="..\YoloIconDetector.cs" Link="YoloIconDetector.cs" />
+    <Compile Include="SharedAppBootstrap.cs" />
+  </ItemGroup>
+</Project>
