@@ -10,9 +10,12 @@ namespace WhatJolo;
 public sealed class UltraTabViewModel : ViewModelBase
 {
     private const float DetectionThreshold = 0.05f;
+    private const string ModelSourceLatestLocal = "Ultimo best.onnx locale";
+    private const string ModelSourceDatabase = "best.onnx dal DB";
     private readonly AdbService _adbService;
     private readonly AnnotationCropDbService _annotationCropDbService;
     private readonly ProjectImageBlobService _projectImageBlobService;
+    private readonly ProjectModelBlobService _projectModelBlobService;
     private readonly ProjectWorkspaceService _workspaceService;
     private readonly YoloTrainingService _yoloTrainingService;
     private string _currentProjectName;
@@ -22,6 +25,7 @@ public sealed class UltraTabViewModel : ViewModelBase
     private BitmapImage? _detectionPreview;
     private string _statusText;
     private string _modelPath;
+    private string _selectedModelSource;
     private string _detectionsSummary;
     private string _lastDetectionImagePath;
     private string _lastDetectionSourceName;
@@ -32,11 +36,13 @@ public sealed class UltraTabViewModel : ViewModelBase
         _adbService = new AdbService();
         _annotationCropDbService = new AnnotationCropDbService();
         _projectImageBlobService = new ProjectImageBlobService();
+        _projectModelBlobService = new ProjectModelBlobService();
         _workspaceService = new ProjectWorkspaceService();
         _yoloTrainingService = new YoloTrainingService();
         _currentProjectName = "Default";
         _statusText = "Pronto.";
         _modelPath = "Modello ONNX non trovato.";
+        _selectedModelSource = ModelSourceLatestLocal;
         _detectionsSummary = "-";
         _lastDetectionImagePath = string.Empty;
         _lastDetectionSourceName = string.Empty;
@@ -44,11 +50,17 @@ public sealed class UltraTabViewModel : ViewModelBase
         TestImages = new ObservableCollection<TestImageItem>();
         TrainImages = new ObservableCollection<TestImageItem>();
         ValImages = new ObservableCollection<TestImageItem>();
+        ModelSourceOptions = new ObservableCollection<string>
+        {
+            ModelSourceLatestLocal,
+            ModelSourceDatabase
+        };
     }
 
     public ObservableCollection<TestImageItem> TestImages { get; }
     public ObservableCollection<TestImageItem> TrainImages { get; }
     public ObservableCollection<TestImageItem> ValImages { get; }
+    public ObservableCollection<string> ModelSourceOptions { get; }
 
     public TestImageItem? SelectedTestImage
     {
@@ -89,6 +101,22 @@ public sealed class UltraTabViewModel : ViewModelBase
     {
         get => _modelPath;
         private set => SetField(ref _modelPath, value);
+    }
+
+    public string SelectedModelSource
+    {
+        get => _selectedModelSource;
+        set
+        {
+            var selectedValue = string.IsNullOrWhiteSpace(value) ? ModelSourceLatestLocal : value;
+            if (!SetField(ref _selectedModelSource, selectedValue))
+            {
+                return;
+            }
+
+            ModelPath = DetectModelPath();
+            StatusText = $"[{_currentProjectName}] Sorgente modello Ultra: {_selectedModelSource}.";
+        }
     }
 
     public string DetectionsSummary
@@ -168,18 +196,18 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
     }
 
-    public async Task CaptureTestImageAsync(string? deviceSerial)
+    public async Task<bool> CaptureTestImageAsync(string? deviceSerial)
     {
         if (!_adbService.Exists())
         {
             StatusText = "ADB non trovato.";
-            return;
+            return false;
         }
 
         if (string.IsNullOrWhiteSpace(deviceSerial))
         {
             StatusText = "Nessun device ADB selezionato.";
-            return;
+            return false;
         }
 
         var outputDirectory = GetTestFolderPath();
@@ -195,6 +223,47 @@ public sealed class UltraTabViewModel : ViewModelBase
         SelectedTrainImage = null;
         SelectedValImage = null;
         StatusText = $"[{_currentProjectName}] Immagine test acquisita: {outputPath}";
+        return true;
+    }
+
+    public async Task CaptureTestImageAndDetectAsync(string? deviceSerial)
+    {
+        var captured = await CaptureTestImageAsync(deviceSerial);
+        if (!captured)
+        {
+            return;
+        }
+
+        await DetectTestImageAsync();
+    }
+
+    public async Task CaptureAdbPreviewAndDetectAsync(string? deviceSerial)
+    {
+        if (!_adbService.Exists())
+        {
+            StatusText = "ADB non trovato.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            StatusText = "Nessun device ADB selezionato.";
+            return;
+        }
+
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "WhatJolo", "UltraPreview", BuildSafeProjectName(_currentProjectName));
+        Directory.CreateDirectory(outputDirectory);
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        var outputPath = Path.Combine(outputDirectory, $"adb_preview_{timestamp}.png");
+
+        StatusText = $"[{_currentProjectName}] Acquisizione preview ADB in corso...";
+        var pngBytes = await _adbService.CapturePngAsync(deviceSerial);
+        await File.WriteAllBytesAsync(outputPath, pngBytes);
+
+        SelectedTestImage = null;
+        SelectedTrainImage = null;
+        SelectedValImage = null;
+        await DetectImageAsync(new TestImageItem(outputPath, Path.GetFileName(outputPath)), "preview adb");
     }
 
     public async Task DetectSelectedImageAsync()
@@ -380,8 +449,20 @@ public sealed class UltraTabViewModel : ViewModelBase
 
     private async Task DetectImageAsync(TestImageItem selectedImage, string sourceName)
     {
-        var modelPath = DetectModelPath();
-        if (!File.Exists(modelPath))
+        string modelPath;
+        try
+        {
+            modelPath = await ResolveDetectionModelPathAsync();
+        }
+        catch (Exception ex)
+        {
+            DetectionPreview = LoadBitmapImage(selectedImage.FilePath);
+            DetectionsSummary = $"Modello ONNX dal DB non disponibile.{Environment.NewLine}{ex.Message}";
+            StatusText = $"[{_currentProjectName}] Errore caricamento modello Ultra dal DB: {ex.Message}";
+            return;
+        }
+
+        if (!File.Exists(modelPath) && !IsDatabaseModelSourceSelected())
         {
             var exportedModelPath = await TryExportMissingOnnxAsync();
             modelPath = !string.IsNullOrWhiteSpace(exportedModelPath) ? exportedModelPath : modelPath;
@@ -527,6 +608,11 @@ public sealed class UltraTabViewModel : ViewModelBase
 
     private string DetectModelPath()
     {
+        if (IsDatabaseModelSourceSelected())
+        {
+            return "DB: best.onnx salvato nel database remoto (scompattato in temp alla detection).";
+        }
+
         var latestOnnxPath = _workspaceService.FindLatestYoloOnnxPath(_currentProjectName);
         if (!string.IsNullOrWhiteSpace(latestOnnxPath))
         {
@@ -540,6 +626,25 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
 
         return Path.Combine(_workspaceService.GetYoloRunsPath(_currentProjectName), BuildSafeProjectName(_currentProjectName), "weights", "best.onnx");
+    }
+
+    private async Task<string> ResolveDetectionModelPathAsync()
+    {
+        if (!IsDatabaseModelSourceSelected())
+        {
+            return DetectModelPath();
+        }
+
+        var restoreResult = await _projectModelBlobService.RestoreLatestBestOnnxToTempAsync(_currentProjectName);
+        ModelPath =
+            $"DB temp: {restoreResult.ModelPath} | Run: {restoreResult.RunName} | " +
+            $"{restoreResult.ByteLength:N0} byte -> {restoreResult.CompressedLength:N0} byte compressi";
+        return restoreResult.ModelPath;
+    }
+
+    private bool IsDatabaseModelSourceSelected()
+    {
+        return string.Equals(_selectedModelSource, ModelSourceDatabase, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<string?> TryExportMissingOnnxAsync()

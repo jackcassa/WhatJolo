@@ -13,6 +13,8 @@ internal sealed class UltraPreviewWindow : Window
     private readonly ScaleTransform _scaleTransform;
     private double _zoom = 1.0;
 
+    public event EventHandler? CaptureAndDetectRequested;
+
     public UltraPreviewWindow()
     {
         Title = "WhatJolo Ultra Preview";
@@ -30,6 +32,7 @@ internal sealed class UltraPreviewWindow : Window
         };
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(170) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
         var headerBorder = new Border
@@ -41,6 +44,10 @@ internal sealed class UltraPreviewWindow : Window
             Background = new SolidColorBrush(Color.FromRgb(24, 24, 24))
         };
         Grid.SetRow(headerBorder, 0);
+
+        var headerGrid = new Grid();
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var headerStack = new StackPanel();
         headerStack.Children.Add(new TextBlock
@@ -59,7 +66,25 @@ internal sealed class UltraPreviewWindow : Window
         };
         modelPathText.SetBinding(TextBlock.TextProperty, new Binding("ModelPath"));
         headerStack.Children.Add(modelPathText);
-        headerBorder.Child = headerStack;
+
+        var captureButton = new Button
+        {
+            Margin = new Thickness(14, 0, 0, 0),
+            Padding = new Thickness(16, 9, 16, 9),
+            MinWidth = 190,
+            Content = "Acquisisci ADB e riconosci",
+            FontWeight = FontWeights.Bold,
+            VerticalAlignment = VerticalAlignment.Top,
+            Background = new SolidColorBrush(Color.FromRgb(255, 153, 0)),
+            Foreground = Brushes.Black,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(255, 212, 0))
+        };
+        captureButton.Click += (_, _) => CaptureAndDetectRequested?.Invoke(this, EventArgs.Empty);
+        Grid.SetColumn(captureButton, 1);
+
+        headerGrid.Children.Add(headerStack);
+        headerGrid.Children.Add(captureButton);
+        headerBorder.Child = headerGrid;
         root.Children.Add(headerBorder);
 
         var previewBorder = new Border
@@ -94,6 +119,33 @@ internal sealed class UltraPreviewWindow : Window
         previewBorder.Child = _scrollViewer;
         root.Children.Add(previewBorder);
 
+        var detectionsBorder = new Border
+        {
+            Margin = new Thickness(0, 12, 0, 0),
+            Padding = new Thickness(10),
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 64)),
+            Background = new SolidColorBrush(Color.FromRgb(16, 16, 16))
+        };
+        Grid.SetRow(detectionsBorder, 2);
+
+        var detectionsText = new TextBox
+        {
+            IsReadOnly = true,
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            BorderThickness = new Thickness(0),
+            Background = new SolidColorBrush(Color.FromRgb(16, 16, 16)),
+            Foreground = new SolidColorBrush(Color.FromRgb(255, 212, 0)),
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12
+        };
+        detectionsText.SetBinding(TextBox.TextProperty, new Binding("DetectionsSummary"));
+        detectionsBorder.Child = detectionsText;
+        root.Children.Add(detectionsBorder);
+
         var statusBorder = new Border
         {
             Margin = new Thickness(0, 12, 0, 0),
@@ -103,7 +155,7 @@ internal sealed class UltraPreviewWindow : Window
             BorderBrush = new SolidColorBrush(Color.FromRgb(255, 153, 0)),
             Background = new SolidColorBrush(Color.FromRgb(24, 24, 24))
         };
-        Grid.SetRow(statusBorder, 2);
+        Grid.SetRow(statusBorder, 3);
 
         var statusText = new TextBlock
         {

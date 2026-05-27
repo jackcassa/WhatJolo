@@ -159,6 +159,14 @@
                             FontWeight="Bold"
                             Content="Reset Training"
                             Click="ResetTraining_Click" />
+                    <Button Margin="10,0,0,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Salva ONNX DB"
+                            Click="SaveBestOnnxToDb_Click" />
                 </UniformGrid>
             </StackPanel>
         </Border>
@@ -943,6 +951,15 @@
                                     FontWeight="Bold"
                                     Content="Promuovi detection"
                                     Click="PromoteUltraDetections_Click" />
+                            <StackPanel Margin="0,0,12,0">
+                                <TextBlock FontWeight="SemiBold"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           Text="Sorgente modello" />
+                                <ComboBox Margin="0,4,0,0"
+                                          Width="210"
+                                          ItemsSource="{Binding UltraTab.ModelSourceOptions}"
+                                          SelectedItem="{Binding UltraTab.SelectedModelSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
                             <StackPanel>
                                 <TextBlock FontWeight="SemiBold"
                                            Foreground="{StaticResource AccentBrush}"

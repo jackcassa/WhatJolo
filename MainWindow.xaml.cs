@@ -256,9 +256,45 @@ public partial class MainWindow : System.Windows.Window
         _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Run eliminata: {deletedRunPath}");
     }
 
+    private async void SaveBestOnnxToDb_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var result = await _viewModel.SaveBestOnnxToDatabaseAsync();
+            _viewModel.AdbCaptureTab.SetStatusMessage(
+                $"[{result.ProjectName}] best.onnx salvato nel DB: {result.ByteLength:N0} byte -> {result.CompressedLength:N0} byte compressi.");
+            MessageBox.Show(
+                this,
+                $"ONNX salvato nel DB.{Environment.NewLine}{Environment.NewLine}" +
+                $"Progetto: {result.ProjectName}{Environment.NewLine}" +
+                $"Run: {result.RunName}{Environment.NewLine}" +
+                $"File: {result.ModelFileName}{Environment.NewLine}" +
+                $"Originale: {result.ByteLength:N0} byte{Environment.NewLine}" +
+                $"Compresso: {result.CompressedLength:N0} byte",
+                "ONNX salvato nel DB",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Errore salvataggio best.onnx nel DB: {ex.Message}");
+            MessageBox.Show(
+                this,
+                ex.Message,
+                "Salva ONNX DB",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
     private async void CaptureUltraTest_Click(object sender, RoutedEventArgs e)
     {
         await _viewModel.UltraTab.CaptureTestImageAsync(_viewModel.AdbCaptureTab.SelectedDeviceSerial);
+    }
+
+    private async void UltraPreview_CaptureAndDetectRequested(object? sender, EventArgs e)
+    {
+        await _viewModel.UltraTab.CaptureAdbPreviewAndDetectAsync(_viewModel.AdbCaptureTab.SelectedDeviceSerial);
     }
 
     private void OpenUltraTestFolder_Click(object sender, RoutedEventArgs e)
@@ -502,7 +538,7 @@ public partial class MainWindow : System.Windows.Window
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
     }
 
-    private async void SaveDbInstance_Click(object sender, RoutedEventArgs e)
+    private void SaveDbInstance_Click(object sender, RoutedEventArgs e)
     {
         try
         {
@@ -596,7 +632,16 @@ public partial class MainWindow : System.Windows.Window
                 Left = Left + Math.Max(40, Width - 1240),
                 Top = Top + 40
             };
-            _ultraPreviewWindow.Closed += (_, _) => _ultraPreviewWindow = null;
+            _ultraPreviewWindow.CaptureAndDetectRequested += UltraPreview_CaptureAndDetectRequested;
+            _ultraPreviewWindow.Closed += (_, _) =>
+            {
+                if (_ultraPreviewWindow != null)
+                {
+                    _ultraPreviewWindow.CaptureAndDetectRequested -= UltraPreview_CaptureAndDetectRequested;
+                }
+
+                _ultraPreviewWindow = null;
+            };
             _ultraPreviewWindow.Show();
             return;
         }
@@ -703,6 +748,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 {
     private readonly ProjectWorkspaceService _workspaceService;
     private readonly ProjectImageBlobService _projectImageBlobService;
+    private readonly ProjectModelBlobService _projectModelBlobService;
     private readonly YoloDatasetBuilderService _yoloDatasetBuilderService;
     private readonly AnnotationCropDbService _annotationCropDbService;
     private bool _isApplyingProjectClasses;
@@ -768,6 +814,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         _workspaceService = new ProjectWorkspaceService();
         _projectImageBlobService = new ProjectImageBlobService();
+        _projectModelBlobService = new ProjectModelBlobService();
         _yoloDatasetBuilderService = new YoloDatasetBuilderService();
         _annotationCropDbService = new AnnotationCropDbService();
         _yoloTrainingService = new YoloTrainingService();
@@ -1217,6 +1264,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         return _workspaceService.ResetLatestYoloRun(SelectedProjectName);
     }
 
+    public async Task<ProjectModelBlobSaveResult> SaveBestOnnxToDatabaseAsync()
+    {
+        var result = await _projectModelBlobService.SaveBestOnnxAsync(SelectedProjectName);
+        StatusText =
+            $"best.onnx salvato nel DB | Progetto: {result.ProjectName} | " +
+            $"Originale: {result.ByteLength:N0} byte | Compresso: {result.CompressedLength:N0} byte";
+        return result;
+    }
+
     public async Task<string> CreateDatasetStructureAsync()
     {
         var activeClasses = ProjectClassOptions
@@ -1326,6 +1382,19 @@ public sealed class MainWindowViewModel : ViewModelBase
                       WHERE ProjectName = @ProjectName
                       ORDER BY UpdatedAtUtc DESC, Id DESC;
                       """;
+                AddParameter(command, "@ProjectName", SelectedProjectName);
+                filterMode = $"filtrato per progetto '{SelectedProjectName}'";
+                break;
+
+            case "ProjectModelBlob":
+            case "projectmodelblob":
+                command.CommandText =
+                    """
+                    SELECT Id, ProjectName, ModelFileName, ModelKind, RunName, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
+                    FROM ProjectModelBlob
+                    WHERE ProjectName = @ProjectName
+                    ORDER BY UpdatedAtUtc DESC, Id DESC;
+                    """;
                 AddParameter(command, "@ProjectName", SelectedProjectName);
                 filterMode = $"filtrato per progetto '{SelectedProjectName}'";
                 break;
@@ -1458,7 +1527,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
                 case "ProjectImageBlob":
                 case "projectimageblob":
+                case "ProjectModelBlob":
+                case "projectmodelblob":
                 {
+                    var tableName = SelectedDatabaseTable.Equals("ProjectModelBlob", StringComparison.OrdinalIgnoreCase)
+                        ? "ProjectModelBlob"
+                        : "ProjectImageBlob";
                     var idText = GetRowValue(rowView, "Id");
                     if (!long.TryParse(idText, out var id))
                     {
@@ -1468,7 +1542,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                     await using var connection = SharedDatabase.CreateConnection();
                     await connection.OpenAsync();
                     await using var command = connection.CreateCommand();
-                    command.CommandText = "DELETE FROM ProjectImageBlob WHERE Id = @Id;";
+                    command.CommandText = $"DELETE FROM {tableName} WHERE Id = @Id;";
                     AddParameter(command, "@Id", id);
                     deletedCount += await command.ExecuteNonQueryAsync();
                     break;
