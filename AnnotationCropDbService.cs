@@ -7,11 +7,11 @@ namespace WhatJolo;
 
 internal sealed class AnnotationCropDbService
 {
-    private readonly string _storageRootPath;
+    private readonly ProjectWorkspaceService _workspaceService;
 
     public AnnotationCropDbService()
     {
-        _storageRootPath = SharedDatabase.GetProjectDirectoryPath();
+        _workspaceService = new ProjectWorkspaceService();
     }
 
     public async Task SaveCropAsync(string projectName, string labelName, string sourceImagePath, string cropImagePath, Int32Rect bounds, bool isVariation = false)
@@ -64,8 +64,8 @@ internal sealed class AnnotationCropDbService
 
                 SELECT Id FROM CropAsset WHERE CropHash = @CropHash;
                 """;
-            AddParameter(cropCommand, "@SourceImagePath", ConvertToStoredPath(sourceImagePath));
-            AddParameter(cropCommand, "@CropImagePath", ConvertToStoredPath(cropImagePath));
+            AddParameter(cropCommand, "@SourceImagePath", ConvertToStoredFileName(sourceImagePath));
+            AddParameter(cropCommand, "@CropImagePath", ConvertToStoredFileName(cropImagePath));
             AddParameter(cropCommand, "@CropHash", cropHash);
             AddParameter(cropCommand, "@X", bounds.X);
             AddParameter(cropCommand, "@Y", bounds.Y);
@@ -114,7 +114,7 @@ internal sealed class AnnotationCropDbService
     public async Task<bool> DeleteCropAsync(string projectName, string labelName, string cropImagePath)
     {
         EnsureProjectCropVariationColumn();
-        var storedCropPath = ConvertToStoredPath(cropImagePath);
+        var storedCropPath = ConvertToStoredFileName(cropImagePath);
 
         await using var connection = SharedDatabase.CreateConnection();
         await connection.OpenAsync();
@@ -237,8 +237,8 @@ internal sealed class AnnotationCropDbService
                 reader.GetString(0),
                 labelName,
                 reader.GetInt32(2) != 0,
-                ResolveStoredPath(reader.GetString(3)),
-                ResolveStoredPath(reader.GetString(4)),
+                ResolveSourceImagePath(reader.GetString(0), reader.GetString(3)),
+                ResolveCropImagePath(reader.GetString(0), labelName, reader.GetString(4)),
                 reader.GetInt32(5),
                 reader.GetInt32(6),
                 reader.GetInt32(7),
@@ -281,8 +281,8 @@ internal sealed class AnnotationCropDbService
                 reader.GetString(0),
                 reader.GetString(1).Trim().ToLowerInvariant(),
                 reader.GetInt32(2) != 0,
-                ResolveStoredPath(reader.GetString(3)),
-                ResolveStoredPath(reader.GetString(4)),
+                ResolveSourceImagePath(reader.GetString(0), reader.GetString(3)),
+                ResolveCropImagePath(reader.GetString(0), reader.GetString(1), reader.GetString(4)),
                 reader.GetInt32(5),
                 reader.GetInt32(6),
                 reader.GetInt32(7),
@@ -337,8 +337,8 @@ internal sealed class AnnotationCropDbService
                 reader.GetString(0),
                 reader.GetString(1).Trim().ToLowerInvariant(),
                 reader.GetInt32(2) != 0,
-                ResolveStoredPath(reader.GetString(3)),
-                ResolveStoredPath(reader.GetString(4)),
+                ResolveSourceImagePath(reader.GetString(0), reader.GetString(3)),
+                ResolveCropImagePath(reader.GetString(0), reader.GetString(1), reader.GetString(4)),
                 reader.GetInt32(5),
                 reader.GetInt32(6),
                 reader.GetInt32(7),
@@ -351,7 +351,7 @@ internal sealed class AnnotationCropDbService
     public async Task<ProjectCropRecord?> GetProjectCropByImagePathAsync(string projectName, string cropImagePath)
     {
         EnsureProjectCropVariationColumn();
-        var storedCropPath = ConvertToStoredPath(cropImagePath);
+        var storedCropPath = ConvertToStoredFileName(cropImagePath);
 
         await using var connection = SharedDatabase.CreateConnection();
         await connection.OpenAsync();
@@ -388,8 +388,8 @@ internal sealed class AnnotationCropDbService
             reader.GetString(0),
             reader.GetString(1).Trim().ToLowerInvariant(),
             reader.GetInt32(2) != 0,
-            ResolveStoredPath(reader.GetString(3)),
-            ResolveStoredPath(reader.GetString(4)),
+            ResolveSourceImagePath(reader.GetString(0), reader.GetString(3)),
+            ResolveCropImagePath(reader.GetString(0), reader.GetString(1), reader.GetString(4)),
             reader.GetInt32(5),
             reader.GetInt32(6),
             reader.GetInt32(7),
@@ -399,8 +399,7 @@ internal sealed class AnnotationCropDbService
     public async Task<int> DeleteCropsBySourceImageAsync(string projectName, string sourceImagePath)
     {
         EnsureProjectCropVariationColumn();
-        var normalizedSourcePath = Path.GetFullPath(sourceImagePath);
-        var storedSourcePath = ConvertToStoredPath(normalizedSourcePath);
+        var storedSourcePath = ConvertToStoredFileName(sourceImagePath);
         var itemsToDelete = new List<(string LabelName, string CropImagePath)>();
         var projectImageBlobService = new ProjectImageBlobService();
 
@@ -423,7 +422,7 @@ internal sealed class AnnotationCropDbService
             await using var reader = await command.ExecuteReaderAsync();
             while (await reader.ReadAsync())
             {
-                itemsToDelete.Add((reader.GetString(0), ResolveStoredPath(reader.GetString(1))));
+                itemsToDelete.Add((reader.GetString(0), ResolveCropImagePath(projectName, reader.GetString(0), reader.GetString(1))));
             }
         }
 
@@ -445,36 +444,44 @@ internal sealed class AnnotationCropDbService
         return deletedCount;
     }
 
-    private string ConvertToStoredPath(string path)
+    private static string ConvertToStoredFileName(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
             return string.Empty;
         }
 
-        var fullPath = Path.GetFullPath(path);
-        if (!fullPath.StartsWith(_storageRootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            return fullPath;
-        }
-
-        return Path.GetRelativePath(_storageRootPath, fullPath).Replace(Path.DirectorySeparatorChar, '/');
+        return Path.GetFileName(path.Trim());
     }
 
-    private string ResolveStoredPath(string storedPath)
+    private string ResolveSourceImagePath(string projectName, string storedFileName)
     {
-        if (string.IsNullOrWhiteSpace(storedPath))
+        var fileName = ConvertToStoredFileName(storedFileName);
+        if (string.IsNullOrWhiteSpace(fileName))
         {
             return string.Empty;
         }
 
-        if (Path.IsPathRooted(storedPath))
+        var capturesPath = _workspaceService.GetCapturesPath(projectName);
+        var variationPath = Path.Combine(capturesPath, "Variations", fileName);
+        if (File.Exists(variationPath) || fileName.StartsWith("adb_capture_var_", StringComparison.OrdinalIgnoreCase))
         {
-            return Path.GetFullPath(storedPath);
+            return variationPath;
         }
 
-        var normalizedRelativePath = storedPath.Replace('/', Path.DirectorySeparatorChar);
-        return Path.GetFullPath(Path.Combine(_storageRootPath, normalizedRelativePath));
+        return Path.Combine(capturesPath, fileName);
+    }
+
+    private string ResolveCropImagePath(string projectName, string labelName, string storedFileName)
+    {
+        var fileName = ConvertToStoredFileName(storedFileName);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return string.Empty;
+        }
+
+        var safeClass = string.IsNullOrWhiteSpace(labelName) ? "crop" : labelName.Trim().ToLowerInvariant();
+        return Path.Combine(_workspaceService.GetSavedCropsPath(projectName), safeClass, fileName);
     }
 
     private static async Task<string> ComputeFileSha256Async(string filePath)
@@ -494,7 +501,17 @@ internal sealed class AnnotationCropDbService
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var alterPgCommand = connection.CreateCommand();
-        alterPgCommand.CommandText = "ALTER TABLE ProjectCropLink ADD COLUMN IF NOT EXISTS IsVariation INTEGER NOT NULL DEFAULT 0;";
+        alterPgCommand.CommandText =
+            """
+            ALTER TABLE ProjectCropLink ADD COLUMN IF NOT EXISTS IsVariation INTEGER NOT NULL DEFAULT 0;
+
+            UPDATE CropAsset
+            SET
+                SourceImagePath = regexp_replace(SourceImagePath, '^.*[\\\/]', ''),
+                CropImagePath = regexp_replace(CropImagePath, '^.*[\\\/]', '')
+            WHERE SourceImagePath LIKE '%\%' OR SourceImagePath LIKE '%/%'
+               OR CropImagePath LIKE '%\%' OR CropImagePath LIKE '%/%';
+            """;
         alterPgCommand.ExecuteNonQuery();
     }
 

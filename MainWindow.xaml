@@ -415,6 +415,199 @@
                 </Grid>
             </TabItem>
 
+            <TabItem Header="Acquisizione Webcam"
+                     IsEnabled="{Binding IsDatabaseConnected}">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="160" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="360" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Row="0"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Stato webcam" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding WebcamTab.StatusText}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Grid.Column="0"
+                            Margin="0,12,0,0"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <Button Height="48"
+                                    FontSize="16"
+                                    FontWeight="Bold"
+                                    Content="Acquisisci frame webcam"
+                                    Click="CaptureWebcamFrame_Click" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Indice camera" />
+                            <TextBox Margin="0,6,0,0"
+                                     Text="{Binding WebcamTab.CameraIndexText, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <Button Margin="0,10,0,0"
+                                    Height="40"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Variazione x10"
+                                    Click="GenerateVariations_Click" />
+
+                            <Separator Margin="0,16,0,16" />
+
+                            <TextBlock FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Ultimo file PNG" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Text="{Binding AdbCaptureTab.LastCapturePath}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Grid Grid.Row="1"
+                          Grid.Column="2"
+                          Margin="0,12,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="12" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <GroupBox Header="{Binding AdbCaptureTab.SavedCropCount, StringFormat=Crop salvate ({0})}">
+                            <ListBox ItemsSource="{Binding AdbCaptureTab.SavedCrops}"
+                                     SelectedItem="{Binding AdbCaptureTab.SelectedSavedCrop}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     KeyDown="SavedCropsList_KeyDown">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8"
+                                                Padding="8"
+                                                Background="{StaticResource PanelAltBackgroundBrush}"
+                                                BorderBrush="{StaticResource BorderBrushStrong}"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Width="96">
+                                            <StackPanel>
+                                                <Image Height="52"
+                                                       Stretch="Uniform"
+                                                       Source="{Binding PreviewImage}" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           Text="{Binding LabelName}"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,8,0,0"
+                                                           FontSize="10"
+                                                           Text="{Binding FileName}"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="36" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="2"
+                                  Header="{Binding AdbCaptureTab.VariationCropCount, StringFormat=Variazioni ({0})}">
+                            <ListBox ItemsSource="{Binding AdbCaptureTab.VariationCrops}"
+                                     SelectedItem="{Binding AdbCaptureTab.SelectedVariationCrop}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     KeyDown="VariationCropsList_KeyDown">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8"
+                                                Padding="8"
+                                                Background="{StaticResource PanelAltBackgroundBrush}"
+                                                BorderBrush="{StaticResource AccentOrangeBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Width="96">
+                                            <StackPanel>
+                                                <Image Height="52"
+                                                       Stretch="Uniform"
+                                                       Source="{Binding PreviewImage}" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentOrangeBrush}"
+                                                           Text="variazione"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,4,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           Text="{Binding LabelName}"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,8,0,0"
+                                                           FontSize="10"
+                                                           Text="{Binding FileName}"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="36" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </GroupBox>
+                    </Grid>
+
+                    <GroupBox Grid.Row="2"
+                              Grid.Column="0"
+                              Grid.ColumnSpan="3"
+                              Margin="0,12,0,0"
+                              Header="Status log">
+                        <TextBox Text="{Binding AdbCaptureTab.StatusLogText, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 Background="{StaticResource AppBackgroundBrush}"
+                                 Foreground="{StaticResource AccentBrush}"
+                                 BorderBrush="{StaticResource AccentOrangeBrush}"
+                                 CaretBrush="{StaticResource AccentBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 TextWrapping="NoWrap" />
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
             <TabItem x:Name="DbInstanceTab"
                      Header="Istanza DB">
                 <Grid Margin="12">

@@ -18,6 +18,7 @@ public partial class MainWindow : System.Windows.Window
 {
     private readonly MainWindowViewModel _viewModel;
     private AdbPreviewWindow? _adbPreviewWindow;
+    private WebcamPreviewWindow? _webcamPreviewWindow;
     private UltraPreviewWindow? _ultraPreviewWindow;
     private bool _suppressDatabaseTableAutoLoad;
 
@@ -115,6 +116,49 @@ public partial class MainWindow : System.Windows.Window
         await _viewModel.AdbCaptureTab.CaptureAdbScreenshotAsync();
         EnsureAdbPreviewWindow();
         _adbPreviewWindow?.ClearSelection();
+    }
+
+    private async void CaptureWebcamFrame_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var capture = await _viewModel.WebcamTab.CaptureAsync();
+            await _viewModel.AdbCaptureTab.ImportCapturePngAsync(
+                capture.PngBytes,
+                $"Webcam {capture.CameraIndex}",
+                $"webcam_{capture.CameraIndex}");
+            EnsureWebcamPreviewWindow();
+            _webcamPreviewWindow?.ResetSelection();
+        }
+        catch (Exception ex)
+        {
+            _viewModel.WebcamTab.SetStatusMessage("Errore acquisizione webcam: " + ex.Message);
+            _viewModel.AdbCaptureTab.SetStatusMessage("Errore acquisizione webcam: " + ex.Message);
+        }
+    }
+
+    private async void SaveWebcamSelection_Click(object? sender, EventArgs e)
+    {
+        var selectedRect = _webcamPreviewWindow?.SelectedPixelRect;
+        if (selectedRect == null)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage("Nessuna selezione webcam da salvare.");
+            return;
+        }
+
+        try
+        {
+            var savedItem = await _viewModel.AdbCaptureTab.SaveSelectionAsync(selectedRect.Value, _viewModel.SelectedCropClass);
+            if (savedItem != null)
+            {
+                _viewModel.WebcamTab.SetStatusMessage($"Selezione webcam salvata: {savedItem.FileName}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _viewModel.WebcamTab.SetStatusMessage("Errore salvataggio selezione webcam: " + ex.Message);
+            _viewModel.AdbCaptureTab.SetStatusMessage("Errore salvataggio selezione webcam: " + ex.Message);
+        }
     }
 
     private async void RefreshDevices_Click(object sender, RoutedEventArgs e)
@@ -586,6 +630,39 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private void EnsureWebcamPreviewWindow()
+    {
+        if (_webcamPreviewWindow == null || !_webcamPreviewWindow.IsLoaded)
+        {
+            _webcamPreviewWindow = new WebcamPreviewWindow
+            {
+                Owner = this,
+                DataContext = _viewModel.AdbCaptureTab,
+                Left = Left + 80,
+                Top = Top + 80
+            };
+            _webcamPreviewWindow.SaveSelectionRequested += SaveWebcamSelection_Click;
+            _webcamPreviewWindow.Closed += (_, _) =>
+            {
+                if (_webcamPreviewWindow != null)
+                {
+                    _webcamPreviewWindow.SaveSelectionRequested -= SaveWebcamSelection_Click;
+                }
+
+                _webcamPreviewWindow = null;
+            };
+            _webcamPreviewWindow.Show();
+            return;
+        }
+
+        if (!_webcamPreviewWindow.IsVisible)
+        {
+            _webcamPreviewWindow.Show();
+        }
+
+        _webcamPreviewWindow.Activate();
+    }
+
     private void CloseAdbPreviewWindow()
     {
         if (_adbPreviewWindow?.IsLoaded == true)
@@ -627,6 +704,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private readonly ProjectWorkspaceService _workspaceService;
     private readonly ProjectImageBlobService _projectImageBlobService;
     private readonly YoloDatasetBuilderService _yoloDatasetBuilderService;
+    private readonly AnnotationCropDbService _annotationCropDbService;
     private bool _isApplyingProjectClasses;
 
     private string _databasePath;
@@ -661,6 +739,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public ObservableCollection<YoloTrainingProfile> YoloTrainingProfiles { get; } = new();
     public ObservableCollection<ProjectClassOption> ProjectClassOptions { get; } = new();
     public AdbCaptureTabViewModel AdbCaptureTab { get; }
+    public WebcamTabViewModel WebcamTab { get; }
     public UltraTabViewModel UltraTab { get; }
 
     private string _statusText;
@@ -690,8 +769,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         _workspaceService = new ProjectWorkspaceService();
         _projectImageBlobService = new ProjectImageBlobService();
         _yoloDatasetBuilderService = new YoloDatasetBuilderService();
+        _annotationCropDbService = new AnnotationCropDbService();
         _yoloTrainingService = new YoloTrainingService();
         AdbCaptureTab = new AdbCaptureTabViewModel();
+        WebcamTab = new WebcamTabViewModel();
         UltraTab = new UltraTabViewModel();
         SharedDatabase.DeactivatePostgres();
         _databasePath = SharedDatabase.GetConnectionDisplayString();
@@ -1064,6 +1145,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (IsDatabaseConnected)
         {
             ApplyProjectClasses(ensuredName);
+            await SelectCropClassForProjectAsync(ensuredName);
         }
         await AdbCaptureTab.SetCurrentProjectAsync(ensuredName, SelectedCropClass);
         UltraTab.SetCurrentProject(ensuredName);
@@ -1091,6 +1173,38 @@ public sealed class MainWindowViewModel : ViewModelBase
     internal Task<ProjectRestoreResult> RestoreCurrentProjectFromDatabaseAsync()
     {
         return _projectImageBlobService.RestoreProjectAsync(SelectedProjectName);
+    }
+
+    private async Task SelectCropClassForProjectAsync(string projectName)
+    {
+        var activeClasses = ProjectClassOptions
+            .Where(option => option.IsSelected)
+            .Select(option => option.Name)
+            .ToArray();
+
+        if (activeClasses.Length == 0)
+        {
+            return;
+        }
+
+        var records = await _annotationCropDbService.GetAllProjectCropsAsync(projectName);
+        var labelsWithCrops = records
+            .Select(record => record.LabelName)
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var selectedClass = activeClasses.FirstOrDefault(activeClass =>
+            labelsWithCrops.Contains(activeClass, StringComparer.OrdinalIgnoreCase));
+
+        selectedClass ??= activeClasses.Contains(SelectedCropClass, StringComparer.OrdinalIgnoreCase)
+            ? SelectedCropClass
+            : activeClasses.First();
+
+        if (!string.Equals(SelectedCropClass, selectedClass, StringComparison.OrdinalIgnoreCase))
+        {
+            SelectedCropClass = selectedClass;
+        }
     }
 
     public string? FindLatestYoloRunPath()

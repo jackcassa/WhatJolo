@@ -9,13 +9,11 @@ internal sealed class ProjectImageBlobService
 {
     private readonly AnnotationCropDbService _annotationCropDbService;
     private readonly ProjectWorkspaceService _workspaceService;
-    private readonly string _storageRootPath;
 
     public ProjectImageBlobService()
     {
         _annotationCropDbService = new AnnotationCropDbService();
         _workspaceService = new ProjectWorkspaceService();
-        _storageRootPath = SharedDatabase.GetProjectDirectoryPath();
     }
 
     public async Task SaveImageAsync(string projectName, string imagePath, string imageKind)
@@ -67,7 +65,7 @@ internal sealed class ProjectImageBlobService
                 UpdatedAtUtc = CURRENT_TIMESTAMP;
             """;
         AddParameter(command, "@ProjectName", projectName);
-        AddParameter(command, "@ImagePath", ConvertToStoredPath(fullPath));
+        AddParameter(command, "@ImagePath", ConvertToStoredFileName(fullPath));
         AddParameter(command, "@ImageKind", imageKind);
         AddParameter(command, "@ContentHash", contentHash);
         AddParameter(command, "@ByteLength", originalBytes.Length);
@@ -94,7 +92,7 @@ internal sealed class ProjectImageBlobService
               AND ImagePath = @ImagePath;
             """;
         AddParameter(command, "@ProjectName", projectName);
-        AddParameter(command, "@ImagePath", ConvertToStoredPath(imagePath));
+        AddParameter(command, "@ImagePath", ConvertToStoredFileName(imagePath));
         await command.ExecuteNonQueryAsync();
     }
 
@@ -152,10 +150,10 @@ internal sealed class ProjectImageBlobService
         }
 
         var deletedCount = 0;
-        var existingBlobPaths = await LoadProjectImagePathsAsync(normalizedProjectName);
-        foreach (var storedImagePath in existingBlobPaths)
+        var existingBlobPaths = await LoadProjectImagesAsync(normalizedProjectName);
+        foreach (var storedImage in existingBlobPaths)
         {
-            var resolvedPath = ResolveStoredPath(storedImagePath);
+            var resolvedPath = ResolveStoredPath(normalizedProjectName, storedImage.ImagePath, storedImage.ImageKind);
             if (expectedImages.ContainsKey(resolvedPath))
             {
                 continue;
@@ -191,7 +189,8 @@ internal sealed class ProjectImageBlobService
         while (await reader.ReadAsync())
         {
             var storedPath = reader.GetString(0);
-            var resolvedPath = ResolveStoredPath(storedPath);
+            var imageKind = reader.GetString(1);
+            var resolvedPath = ResolveStoredPath(normalizedProjectName, storedPath, imageKind);
             var compressedBytes = (byte[])reader.GetValue(2);
             var originalBytes = Decompress(compressedBytes);
 
@@ -240,19 +239,23 @@ internal sealed class ProjectImageBlobService
 
             CREATE INDEX IF NOT EXISTS IX_ProjectImageBlob_ProjectName
                 ON ProjectImageBlob(ProjectName, ImageKind, UpdatedAtUtc DESC);
+
+            UPDATE ProjectImageBlob
+            SET ImagePath = regexp_replace(ImagePath, '^.*[\\\/]', '')
+            WHERE ImagePath LIKE '%\%' OR ImagePath LIKE '%/%';
             """;
         command.ExecuteNonQuery();
     }
 
-    private async Task<IReadOnlyList<string>> LoadProjectImagePathsAsync(string projectName)
+    private async Task<IReadOnlyList<ProjectImageReference>> LoadProjectImagesAsync(string projectName)
     {
-        var items = new List<string>();
+        var items = new List<ProjectImageReference>();
         await using var connection = SharedDatabase.CreateConnection();
         await connection.OpenAsync();
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT ImagePath
+            SELECT ImagePath, ImageKind
             FROM ProjectImageBlob
             WHERE ProjectName = @ProjectName;
             """;
@@ -261,42 +264,59 @@ internal sealed class ProjectImageBlobService
         await using var reader = await command.ExecuteReaderAsync();
         while (await reader.ReadAsync())
         {
-            items.Add(reader.GetString(0));
+            items.Add(new ProjectImageReference(reader.GetString(0), reader.GetString(1)));
         }
 
         return items;
     }
 
-    private string ConvertToStoredPath(string path)
+    private static string ConvertToStoredFileName(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
             return string.Empty;
         }
 
-        var fullPath = Path.GetFullPath(path);
-        if (!fullPath.StartsWith(_storageRootPath, StringComparison.OrdinalIgnoreCase))
-        {
-            return fullPath;
-        }
-
-        return Path.GetRelativePath(_storageRootPath, fullPath).Replace(Path.DirectorySeparatorChar, '/');
+        return Path.GetFileName(path.Trim());
     }
 
-    private string ResolveStoredPath(string storedPath)
+    private string ResolveStoredPath(string projectName, string storedPath, string imageKind)
     {
-        if (string.IsNullOrWhiteSpace(storedPath))
+        var fileName = ConvertToStoredFileName(storedPath);
+        if (string.IsNullOrWhiteSpace(fileName))
         {
             return string.Empty;
         }
 
-        if (Path.IsPathRooted(storedPath))
+        return imageKind switch
         {
-            return Path.GetFullPath(storedPath);
+            "capture" => Path.Combine(_workspaceService.GetCapturesPath(projectName), fileName),
+            "variation-source" => Path.Combine(_workspaceService.GetCapturesPath(projectName), "Variations", fileName),
+            "crop" or "variation-crop" => Path.Combine(
+                _workspaceService.GetSavedCropsPath(projectName),
+                ExtractLabelFromCropFileName(fileName),
+                fileName),
+            "dataset-train" => Path.Combine(_workspaceService.GetYoloDatasetPath(projectName), "images", "train", fileName),
+            "dataset-val" => Path.Combine(_workspaceService.GetYoloDatasetPath(projectName), "images", "val", fileName),
+            "dataset-test" => Path.Combine(_workspaceService.GetYoloDatasetPath(projectName), "images", "test", fileName),
+            "test" => Path.Combine(_workspaceService.GetYoloTestPath(projectName), fileName),
+            _ => Path.Combine(_workspaceService.GetProjectPath(projectName), fileName)
+        };
+    }
+
+    private static string ExtractLabelFromCropFileName(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        var variationIndex = name.IndexOf("_var_", StringComparison.OrdinalIgnoreCase);
+        if (variationIndex > 0)
+        {
+            return name[..variationIndex].Trim().ToLowerInvariant();
         }
 
-        var normalizedRelativePath = storedPath.Replace('/', Path.DirectorySeparatorChar);
-        return Path.GetFullPath(Path.Combine(_storageRootPath, normalizedRelativePath));
+        var timestampSeparatorIndex = name.IndexOf('_');
+        return timestampSeparatorIndex > 0
+            ? name[..timestampSeparatorIndex].Trim().ToLowerInvariant()
+            : "crop";
     }
 
     private static byte[] Compress(byte[] inputBytes)
@@ -352,3 +372,5 @@ internal sealed class ProjectImageBlobService
 }
 
 internal sealed record ProjectRestoreResult(string ProjectName, string ProjectPath, string YoloProjectPath, int RestoredImageCount);
+
+internal sealed record ProjectImageReference(string ImagePath, string ImageKind);

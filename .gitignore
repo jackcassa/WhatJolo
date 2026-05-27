@@ -16,3 +16,6 @@ Projects/
 */test_yolo.log
 */yolo*.pt
 */yolo*.onnx
+compare_inference/
+primo/
+Projects/

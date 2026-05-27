@@ -131,6 +131,7 @@ internal sealed class YoloTrainingService
               " epochs=" + epochs +
               " imgsz=" + imageSize +
               " batch=" + batch +
+              " device=0" +
               " project=" + QuoteArg(runsFolder) +
               " name=" + QuoteArg(effectiveRunName) +
               " exist_ok=true"
@@ -141,6 +142,7 @@ internal sealed class YoloTrainingService
               " epochs=" + epochs +
               " imgsz=" + imageSize +
               " batch=" + batch +
+              " device=0" +
               " project=" + QuoteArg(runsFolder) +
               " name=" + QuoteArg(effectiveRunName);
 
@@ -150,7 +152,7 @@ internal sealed class YoloTrainingService
         Report(progress, new YoloTrainingProgress("Preparazione training YOLO...", null, null, "info"));
         Report(progress, new YoloTrainingProgress("Runtime: " + command.FileName, null, null, "info"));
         Report(progress, new YoloTrainingProgress("Modello: " + modelName, null, null, "info"));
-        Report(progress, new YoloTrainingProgress($"Parametri: epochs={epochs} imgsz={imageSize} batch={batch}", null, null, "info"));
+        Report(progress, new YoloTrainingProgress($"Parametri: epochs={epochs} imgsz={imageSize} batch={batch} device=0", null, null, "info"));
         Report(progress, new YoloTrainingProgress(resumeTraining
             ? "Continua training da last.pt come pesi iniziali"
             : "Training nuovo da zero", null, null, "info"));
@@ -499,6 +501,7 @@ internal sealed class YoloTrainingService
         var candidates = new[]
         {
             Path.GetFullPath(Path.Combine(SharedDatabase.GetHidRootPath(), "ScrcpyKeyboardClient", "YoloRuntime", ".venv", "Scripts", "yolo.exe")),
+            Path.GetFullPath(Path.Combine(SharedDatabase.GetHidRootPath(), "HID", "ScrcpyKeyboardClient", "YoloRuntime", ".venv", "Scripts", "yolo.exe")),
             Path.GetFullPath(Path.Combine(SharedDatabase.GetProjectDirectoryPath(), "YoloRuntime", ".venv", "Scripts", "yolo.exe"))
         };
 
@@ -511,6 +514,7 @@ internal sealed class YoloTrainingService
         var pythonCandidates = new[]
         {
             Path.GetFullPath(Path.Combine(SharedDatabase.GetHidRootPath(), "ScrcpyKeyboardClient", "YoloRuntime", ".venv", "Scripts", "python.exe")),
+            Path.GetFullPath(Path.Combine(SharedDatabase.GetHidRootPath(), "HID", "ScrcpyKeyboardClient", "YoloRuntime", ".venv", "Scripts", "python.exe")),
             Path.GetFullPath(Path.Combine(SharedDatabase.GetProjectDirectoryPath(), "YoloRuntime", ".venv", "Scripts", "python.exe"))
         };
 

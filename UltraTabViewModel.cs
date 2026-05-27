@@ -404,6 +404,7 @@ public sealed class UltraTabViewModel : ViewModelBase
             using var detector = new YoloIconDetector(modelPath);
             var debugResult = detector.DetectDebug(bitmap, DetectionThreshold);
             var groundTruthBoxes = LoadGroundTruthBoxes(selectedImage.FilePath, bitmap.Width, bitmap.Height);
+            var validationMetrics = ComputeValidationMetrics(debugResult.Detections, groundTruthBoxes);
             using var annotated = DrawDetections(bitmap, debugResult.Detections, groundTruthBoxes);
             var lines = new List<string>
             {
@@ -418,7 +419,11 @@ public sealed class UltraTabViewModel : ViewModelBase
                 $"Ground truth boxes: {groundTruthBoxes.Count}",
                 $"Detection grezze: {debugResult.RawDetectionCount}",
                 $"Sopra soglia: {debugResult.AboveThresholdCount}",
-                $"Dopo NMS: {debugResult.FinalDetectionCount}"
+                $"Dopo NMS: {debugResult.FinalDetectionCount}",
+                $"Match GT: {validationMetrics.MatchedGroundTruth}/{groundTruthBoxes.Count}",
+                $"Recall test immagine: {validationMetrics.Recall:P1}",
+                $"IoU medio match: {validationMetrics.MeanIou:P1}",
+                $"Confidence media match: {validationMetrics.MeanConfidence:P1}"
             };
 
             if (groundTruthBoxes.Count > 0)
@@ -610,6 +615,77 @@ public sealed class UltraTabViewModel : ViewModelBase
         return boxes;
     }
 
+    private static DetectionValidationMetrics ComputeValidationMetrics(
+        IReadOnlyList<YoloDetection> detections,
+        IReadOnlyList<GroundTruthBox> groundTruthBoxes)
+    {
+        if (groundTruthBoxes.Count == 0)
+        {
+            return new DetectionValidationMetrics(0, 0, 0, 0);
+        }
+
+        var usedDetectionIndexes = new HashSet<int>();
+        var matchedCount = 0;
+        var iouSum = 0d;
+        var confidenceSum = 0d;
+
+        foreach (var groundTruth in groundTruthBoxes)
+        {
+            var bestDetectionIndex = -1;
+            var bestIou = 0d;
+
+            for (var index = 0; index < detections.Count; index++)
+            {
+                if (usedDetectionIndexes.Contains(index))
+                {
+                    continue;
+                }
+
+                var detection = detections[index];
+                if (!string.Equals(detection.Label, groundTruth.Label, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var iou = ComputeIou(detection.Bounds, groundTruth.Bounds);
+                if (iou > bestIou)
+                {
+                    bestIou = iou;
+                    bestDetectionIndex = index;
+                }
+            }
+
+            if (bestDetectionIndex < 0 || bestIou < 0.5d)
+            {
+                continue;
+            }
+
+            usedDetectionIndexes.Add(bestDetectionIndex);
+            matchedCount++;
+            iouSum += bestIou;
+            confidenceSum += detections[bestDetectionIndex].Confidence;
+        }
+
+        return new DetectionValidationMetrics(
+            matchedCount,
+            matchedCount / (double)groundTruthBoxes.Count,
+            matchedCount == 0 ? 0 : iouSum / matchedCount,
+            matchedCount == 0 ? 0 : confidenceSum / matchedCount);
+    }
+
+    private static double ComputeIou(Rectangle a, Rectangle b)
+    {
+        var intersection = Rectangle.Intersect(a, b);
+        if (intersection.IsEmpty)
+        {
+            return 0d;
+        }
+
+        var intersectionArea = intersection.Width * intersection.Height;
+        var unionArea = (a.Width * a.Height) + (b.Width * b.Height) - intersectionArea;
+        return unionArea <= 0 ? 0d : intersectionArea / (double)unionArea;
+    }
+
     private string? ResolveLabelPath(string imagePath)
     {
         var trainFolder = GetTrainImagesFolderPath();
@@ -772,3 +848,5 @@ public sealed record TestImageItem(string FilePath, string FileName);
 internal sealed record UltraDetectionResult(BitmapImage Preview, string[] Lines, int FinalDetectionCount, IReadOnlyList<YoloDetection> Detections);
 
 internal sealed record GroundTruthBox(string Label, Rectangle Bounds);
+
+internal sealed record DetectionValidationMetrics(int MatchedGroundTruth, double Recall, double MeanIou, double MeanConfidence);

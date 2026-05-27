@@ -210,6 +210,29 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         }
     }
 
+    public async Task ImportCapturePngAsync(byte[] pngBytes, string sourceLabel, string filePrefix)
+    {
+        if (pngBytes.Length == 0)
+        {
+            AdbStatusText = $"[{CurrentProjectName}] {sourceLabel}: frame vuoto.";
+            return;
+        }
+
+        var outputDirectory = GetCapturesFolderPath();
+        Directory.CreateDirectory(outputDirectory);
+
+        var safePrefix = string.IsNullOrWhiteSpace(filePrefix) ? "capture" : filePrefix.Trim().ToLowerInvariant();
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        var outputPath = Path.Combine(outputDirectory, $"{safePrefix}_{timestamp}.png");
+
+        await File.WriteAllBytesAsync(outputPath, pngBytes);
+        await _projectImageBlobService.SaveImageAsync(CurrentProjectName, outputPath, "capture");
+        await AlignCurrentProjectAsync(safePrefix);
+        LastCapturePath = outputPath;
+        LatestScreenshotPreview = CreateBitmapImage(pngBytes);
+        AdbStatusText = $"[{CurrentProjectName}] {sourceLabel}: acquisizione completata ({pngBytes.Length:N0} byte PNG).";
+    }
+
     public string GetCapturesFolderPath()
     {
         return _workspaceService.GetCapturesPath(CurrentProjectName);

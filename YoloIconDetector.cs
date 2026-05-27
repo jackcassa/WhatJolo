@@ -325,8 +325,8 @@ public sealed class YoloIconDetector : IDisposable
         using var canvas = new Bitmap(_inputWidth, _inputHeight);
         using (var graphics = Graphics.FromImage(canvas))
         {
-            graphics.Clear(Color.Black);
-            graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            graphics.Clear(Color.FromArgb(114, 114, 114));
+            graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;
             graphics.DrawImage(source, padX, padY, resizedWidth, resizedHeight);
         }
 
