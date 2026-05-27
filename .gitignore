@@ -1,0 +1,15 @@
+/.vs/
+/bin/
+/obj/
+*.user
+db.instance.json
+Captures/
+Projects/
+*/dataset/
+*/runs/
+*/runs_test/
+*/test/
+*/train_yolo.log
+*/test_yolo.log
+*/yolo*.pt
+*/yolo*.onnx

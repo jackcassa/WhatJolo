@@ -1,0 +1,122 @@
+WhatJolo - step eseguiti
+========================
+
+1. Creato il nuovo progetto WhatJolo dentro:
+   C:\Users\jack\Documents\Playground\HID\WhatJolo
+
+2. Convertito il progetto in WPF:
+   - WhatJolo.csproj con UseWPF=true
+   - App.xaml / App.xaml.cs
+   - MainWindow.xaml / MainWindow.xaml.cs
+
+3. Collegato WhatJolo al DB esistente di ScrcpyKeyboardClient:
+   - C:\Users\jack\Documents\Playground\HID\ScrcpyKeyboardClient\AnnotationTemplates\annotations.sqlite3
+
+4. Aggiunto SharedDatabase.cs:
+   - path root progetto
+   - path DB condiviso
+   - connection string SQLite
+
+5. Creata la shell iniziale WPF:
+   - titolo WhatJolo
+   - tab Database
+   - lettura tabelle SQLite dal DB condiviso
+
+6. Aggiunta la tab "Acquisizione ADB"
+   - area info cattura
+   - area preview immagine
+   - stato acquisizione
+
+7. Implementata la cattura screenshot ADB in formato lossless:
+   - adb exec-out screencap -p
+   - salvataggio PNG in:
+     C:\Users\jack\Documents\Playground\HID\WhatJolo\Captures
+   - preview immediata dell'immagine acquisita
+
+8. Aggiunta la barra superiore con bottoni progetto:
+   - Apri cartella progetto
+   - Apri DB condiviso
+   - Apri captures
+
+9. Aggiunta la combo classe crop con classi fisse:
+   - cerca
+   - back
+   - freccia
+   - invio
+   - microfono
+
+10. Applicato look black/yellow all'interfaccia:
+    - palette nero/antracite
+    - accenti gialli
+    - tab selezionata black/orange
+
+11. Aggiunta connessione automatica ad ADB all'avvio:
+    - adb start-server
+    - refresh automatico device
+    - selezione automatica del device disponibile
+
+12. Separata tutta la logica ADB in AdbService.cs:
+    - start-server
+    - adb devices
+    - screencap -p
+    - gestione errori adb
+
+13. Separata la logica della tab ADB in AdbCaptureTabViewModel.cs:
+    - stato ADB
+    - lista device
+    - selezione device
+    - cattura screenshot
+    - preview e path ultimo file
+
+14. Aggiunta ViewModelBase.cs:
+    - supporto PropertyChanged
+    - SetField comune
+
+15. Rifinito MainWindowViewModel:
+    - mantiene la parte generale del progetto
+    - espone AdbCaptureTab come sotto-viewmodel
+    - tiene la parte DB e la combo classi
+
+16. Corretto il calcolo dei path condivisi:
+    - distinta cartella progetto WhatJolo da root HID
+    - corretto path DB condiviso
+    - corretto path adb.exe dentro Playground\tools
+
+17. Migliorata l'inizializzazione ADB:
+    - connessione avviata nel Loaded della finestra
+    - refresh device più affidabile
+    - combo device popolata all'apertura
+
+18. Corretta la preview screenshot:
+    - immagine mostrata tutta nel riquadro
+    - scaling uniforme senza scroll
+    - finestra avviata massimizzata
+
+19. Migliorato il tema UI:
+    - combo box con colori leggibili
+    - tab selezionata black/orange
+    - palette black/yellow coerente anche nei popup
+
+20. Aggiunta selezione grafica sulla preview:
+    - drag del mouse sullo screenshot
+    - rettangolo visibile di selezione
+    - conversione in coordinate pixel reali
+    - messaggio stato con X/Y/W/H della selezione
+
+21. Aggiunto il bottone "Salva selezione":
+    - salva il crop come PNG
+    - usa la classe selezionata nella combo
+    - salva in:
+      C:\Users\jack\Documents\Playground\HID\WhatJolo\SavedCrops\<classe>\
+
+22. Aggiunta la vista laterale delle crop salvate:
+    - colonna a destra della preview
+    - mostra le crop della classe selezionata
+    - refresh automatico:
+      - all'avvio
+      - quando cambia la classe
+      - dopo il salvataggio di una nuova crop
+
+23. Verificata la build finale:
+    - 0 errori
+    - 0 avvisi

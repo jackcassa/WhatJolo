@@ -1,0 +1,896 @@
+<Window x:Class="WhatJolo.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="WhatJolo"
+        Width="1100"
+        Height="760"
+        WindowState="Maximized"
+        WindowStartupLocation="CenterScreen">
+    <DockPanel Margin="16">
+        <TextBlock DockPanel.Dock="Top"
+                   Margin="0,0,0,12"
+                   FontSize="28"
+                   FontWeight="Bold"
+                   Foreground="{StaticResource AccentBrush}"
+                   Text="WhatJolo" />
+
+        <Border DockPanel.Dock="Top"
+                Margin="0,0,0,12"
+                Padding="12"
+                Background="{StaticResource PanelBackgroundBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,10">
+                    <TextBlock DockPanel.Dock="Left"
+                               Margin="0,0,16,0"
+                               VerticalAlignment="Center"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource AccentBrush}"
+                               Text="Azioni progetto" />
+                    <WrapPanel>
+                        <StackPanel Margin="0,0,12,8">
+                            <TextBlock FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="Progetto" />
+                            <ComboBox Width="150"
+                                      Margin="0,6,0,0"
+                                      DisplayMemberPath="."
+                                      ItemsSource="{Binding ProjectNames}"
+                                      SelectedItem="{Binding SelectedProjectName}"
+                                      SelectionChanged="ProjectComboBox_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Margin="0,0,12,8">
+                            <TextBlock FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="Classi YOLO progetto" />
+                            <ComboBox Width="210"
+                                      Margin="0,6,0,0"
+                                      IsEditable="True"
+                                      IsReadOnly="True"
+                                      StaysOpenOnEdit="True"
+                                      IsTextSearchEnabled="False"
+                                      Text="{Binding ActiveProjectClassesSummary, Mode=OneWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <CheckBox Margin="4,2"
+                                                  Content="{Binding Name}"
+                                                  IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                                <ComboBox.ItemsSource>
+                                    <Binding Path="ProjectClassOptions" />
+                                </ComboBox.ItemsSource>
+                            </ComboBox>
+                        </StackPanel>
+
+                        <StackPanel Margin="0,0,12,8">
+                            <TextBlock FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="Classe crop" />
+                            <ComboBox Width="140"
+                                      Margin="0,6,0,0"
+                                      ItemsSource="{Binding CropClasses}"
+                                      SelectedItem="{Binding SelectedCropClass}"
+                                      SelectionChanged="CropClassComboBox_SelectionChanged" />
+                        </StackPanel>
+
+                        <StackPanel Margin="0,0,12,8">
+                            <TextBlock FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="Modello YOLO" />
+                            <ComboBox Width="130"
+                                      Margin="0,6,0,0"
+                                      ItemsSource="{Binding YoloModelOptions}"
+                                      SelectedItem="{Binding SelectedYoloModel}" />
+                            <TextBlock Width="190"
+                                       Margin="0,6,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding SelectedYoloModelInfo}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <StackPanel Margin="0,0,0,8">
+                            <TextBlock FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="Profilo YOLO" />
+                            <ComboBox Width="150"
+                                      Margin="0,6,0,0"
+                                      DisplayMemberPath="DisplayName"
+                                      ItemsSource="{Binding YoloTrainingProfiles}"
+                                      SelectedItem="{Binding SelectedYoloTrainingProfile}" />
+                            <TextBlock Width="220"
+                                       Margin="0,6,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding SelectedYoloTrainingProfileInfo}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </WrapPanel>
+                </DockPanel>
+
+                <UniformGrid Columns="9"
+                             Margin="0,4,0,0">
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Nuovo progetto"
+                            Click="CreateProject_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Apri/Ricrea progetto"
+                            Click="OpenProjectFolder_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Apri captures"
+                            Click="OpenCapturesFolder_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Apri DB condiviso"
+                            Click="OpenSharedDatabase_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Crea Data Set"
+                            Click="CreateDataset_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Crea Test DB"
+                            Click="CreateDatasetTestFromDb_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Yolo"
+                            Click="TrainYolo_Click" />
+                    <Button Margin="0,0,10,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Yolo Test"
+                            Click="TestYolo_Click" />
+                    <Button Margin="0,0,0,0"
+                            MinWidth="0"
+                            Height="44"
+                            Padding="14,8"
+                            FontSize="13"
+                            FontWeight="Bold"
+                            Content="Reset Training"
+                            Click="ResetTraining_Click" />
+                </UniformGrid>
+            </StackPanel>
+        </Border>
+
+        <TabControl x:Name="RootTabControl">
+            <TabItem Header="Acquisizione ADB"
+                     IsEnabled="{Binding IsDatabaseConnected}">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="160" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="360" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Row="0"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="420" />
+                                <ColumnDefinition Width="16" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Grid.Column="0"
+                                    Padding="10"
+                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                    BorderBrush="{StaticResource AccentOrangeBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="6">
+                                <StackPanel>
+                                    <TextBlock FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentOrangeBrush}"
+                                               Text="YOLO training" />
+                                    <TextBlock Margin="0,6,0,0"
+                                               FontSize="16"
+                                               FontWeight="Bold"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               Text="{Binding YoloEpochInfo}" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{StaticResource ForegroundMutedBrush}"
+                                               Text="{Binding YoloStatusText}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2"
+                                    Padding="10"
+                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                    BorderBrush="{StaticResource BorderBrushStrong}"
+                                    BorderThickness="1"
+                                    CornerRadius="6">
+                                <StackPanel>
+                                    <TextBlock FontWeight="SemiBold"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               Text="Stato ADB" />
+                                    <TextBlock Margin="0,6,0,0"
+                                               Foreground="{StaticResource ForegroundMutedBrush}"
+                                               Text="{Binding AdbCaptureTab.AdbStatusText}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                                Grid.Column="0"
+                            Margin="0,12,0,0"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <Button Height="48"
+                                    FontSize="16"
+                                    FontWeight="Bold"
+                                    Content="Acquisisci screenshot ADB"
+                                    Click="CaptureAdbScreenshot_Click" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Device collegato" />
+                            <ComboBox Margin="0,6,0,0"
+                                      ItemsSource="{Binding AdbCaptureTab.ConnectedDevices}"
+                                      SelectedItem="{Binding AdbCaptureTab.SelectedDeviceSerial}" />
+
+                            <Button Margin="0,10,0,0"
+                                    Height="40"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Aggiorna lista device"
+                                    Click="RefreshDevices_Click" />
+
+                            <Button Margin="0,10,0,0"
+                                    Height="40"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Salva selezione"
+                                    Click="SaveSelection_Click" />
+
+                            <Button Margin="0,10,0,0"
+                                    Height="40"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Variazione x10"
+                                    Click="GenerateVariations_Click" />
+
+                            <Separator Margin="0,16,0,16" />
+
+                            <TextBlock FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="ADB" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Text="{Binding AdbCaptureTab.AdbExecutablePath}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Ultimo file PNG" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Text="{Binding AdbCaptureTab.LastCapturePath}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Grid Grid.Row="1"
+                          Grid.Column="2"
+                          Margin="0,12,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="12" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <GroupBox Header="{Binding AdbCaptureTab.SavedCropCount, StringFormat=Crop salvate ({0})}">
+                            <ListBox ItemsSource="{Binding AdbCaptureTab.SavedCrops}"
+                                     SelectedItem="{Binding AdbCaptureTab.SelectedSavedCrop}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     KeyDown="SavedCropsList_KeyDown">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8"
+                                                Padding="8"
+                                                Background="{StaticResource PanelAltBackgroundBrush}"
+                                                BorderBrush="{StaticResource BorderBrushStrong}"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Width="96">
+                                            <StackPanel>
+                                                <Image Height="52"
+                                                       Stretch="Uniform"
+                                                       Source="{Binding PreviewImage}" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           Text="{Binding LabelName}"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,8,0,0"
+                                                           FontSize="10"
+                                                           Text="{Binding FileName}"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="36" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </GroupBox>
+
+                        <GroupBox Grid.Row="2"
+                                  Header="{Binding AdbCaptureTab.VariationCropCount, StringFormat=Variazioni ({0})}">
+                            <ListBox ItemsSource="{Binding AdbCaptureTab.VariationCrops}"
+                                     SelectedItem="{Binding AdbCaptureTab.SelectedVariationCrop}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     KeyDown="VariationCropsList_KeyDown">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Margin="0,0,0,8"
+                                                Padding="8"
+                                                Background="{StaticResource PanelAltBackgroundBrush}"
+                                                BorderBrush="{StaticResource AccentOrangeBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Width="96">
+                                            <StackPanel>
+                                                <Image Height="52"
+                                                       Stretch="Uniform"
+                                                       Source="{Binding PreviewImage}" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentOrangeBrush}"
+                                                           Text="variazione"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,4,0,0"
+                                                           FontSize="10"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="{StaticResource AccentBrush}"
+                                                           Text="{Binding LabelName}"
+                                                           TextAlignment="Center" />
+                                                <TextBlock Margin="0,8,0,0"
+                                                           FontSize="10"
+                                                           Text="{Binding FileName}"
+                                                           TextWrapping="Wrap"
+                                                           MaxHeight="36" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </GroupBox>
+                    </Grid>
+
+                    <GroupBox Grid.Row="2"
+                              Grid.Column="0"
+                              Grid.ColumnSpan="3"
+                              Margin="0,12,0,0"
+                              Header="Status log">
+                        <TextBox Text="{Binding AdbCaptureTab.StatusLogText, Mode=OneWay}"
+                                 IsReadOnly="True"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 Background="{StaticResource AppBackgroundBrush}"
+                                 Foreground="{StaticResource AccentBrush}"
+                                 BorderBrush="{StaticResource AccentOrangeBrush}"
+                                 CaretBrush="{StaticResource AccentBrush}"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 TextWrapping="NoWrap" />
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="DbInstanceTab"
+                     Header="Istanza DB">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="420" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <TextBlock FontSize="18"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Connessione database remoto" />
+                            <TextBlock Margin="0,8,0,0"
+                                       FontSize="14"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding DatabaseBackendName}" />
+                            <TextBlock Margin="0,6,0,0"
+                                       FontSize="13"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding DatabasePath}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Grid.Column="0"
+                            Margin="0,12,0,0"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <CheckBox Content="Abilita PostgreSQL remoto"
+                                      IsChecked="{Binding DbInstanceEnabled}"
+                                      FontSize="14"
+                                      FontWeight="SemiBold"
+                                      Foreground="{StaticResource AccentBrush}" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Host" />
+                            <TextBox Margin="0,6,0,0"
+                                     Text="{Binding DbInstanceHost, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Porta" />
+                            <TextBox Margin="0,6,0,0"
+                                     Text="{Binding DbInstancePort, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Database" />
+                            <TextBox Margin="0,6,0,0"
+                                     Text="{Binding DbInstanceDatabase, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Utente" />
+                            <TextBox Margin="0,6,0,0"
+                                     Text="{Binding DbInstanceUsername, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Password" />
+                            <PasswordBox x:Name="DbInstancePasswordBox"
+                                         Margin="0,6,0,0"
+                                         PasswordChanged="DbInstancePasswordBox_PasswordChanged" />
+
+                            <UniformGrid Columns="4"
+                                         Margin="0,18,0,0">
+                                <Button Margin="0,0,10,0"
+                                        Height="42"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Connetti"
+                                        Click="ConnectDbInstance_Click" />
+                                <Button Margin="0,0,10,0"
+                                        Height="42"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Salva"
+                                        Click="SaveDbInstance_Click" />
+                                <Button Margin="0,0,10,0"
+                                        Height="42"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Test connessione"
+                                        Click="TestDbInstance_Click" />
+                                <Button Height="42"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Ricarica"
+                                        Click="ReloadDbInstance_Click" />
+                            </UniformGrid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="1"
+                            Grid.Column="2"
+                            Margin="0,12,0,0"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <TextBlock FontSize="16"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Indirizzi macchina" />
+                            <TextBlock Margin="0,8,0,0"
+                                       FontSize="14"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding RemoteAccessAddresses}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBlock Margin="0,18,0,0"
+                                       FontSize="16"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Connection preview" />
+                            <TextBox Margin="0,8,0,0"
+                                     Text="{Binding DbConnectionPreview, Mode=OneWay}"
+                                     IsReadOnly="True"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Background="{StaticResource AppBackgroundBrush}"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     BorderBrush="{StaticResource AccentOrangeBrush}"
+                                     FontFamily="Consolas"
+                                     FontSize="13"
+                                     TextWrapping="Wrap" />
+
+                            <TextBlock Margin="0,18,0,0"
+                                       FontSize="16"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Stato" />
+                            <TextBlock Margin="0,8,0,0"
+                                       FontSize="14"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding DbInstanceStatus}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </TabItem>
+
+            <TabItem x:Name="DatabaseTab"
+                     Header="Database"
+                     IsEnabled="{Binding IsDatabaseConnected}">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="300" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       Text="Database condiviso" />
+                            <TextBlock Margin="0,6,0,0"
+                                       Text="{Binding DatabasePath}"
+                                       TextWrapping="Wrap" />
+                            <TextBlock Margin="0,8,0,0"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding StatusText}" />
+                            <Button Margin="0,12,0,0"
+                                    Width="140"
+                                    Height="38"
+                                    HorizontalAlignment="Left"
+                                    FontSize="13"
+                                    FontWeight="Bold"
+                                    Content="Aggiorna DB"
+                                    Click="RefreshDatabase_Click" />
+                        </StackPanel>
+                    </Border>
+
+                    <GroupBox Grid.Row="1"
+                              Grid.Column="0"
+                              Margin="0,12,0,0"
+                              Header="Tabelle trovate">
+                        <ListBox ItemsSource="{Binding Tables}"
+                                 FontSize="15"
+                                 Background="{StaticResource AppBackgroundBrush}"
+                                 Foreground="{StaticResource AccentBrush}"
+                                 BorderBrush="{StaticResource AccentOrangeBrush}"
+                                 SelectedItem="{Binding SelectedDatabaseTable}"
+                                 SelectionChanged="DatabaseTables_SelectionChanged" />
+                    </GroupBox>
+
+                    <GroupBox Grid.Row="1"
+                              Grid.Column="2"
+                              Margin="0,12,0,0"
+                              Header="{Binding SelectedDatabaseTable, StringFormat=Dati tabella: {0}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Margin="0,0,0,10"
+                                       FontSize="14"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding DatabaseTableStatus}"
+                                       TextWrapping="Wrap" />
+
+                            <DataGrid Grid.Row="1"
+                                      ItemsSource="{Binding DatabaseRowsView}"
+                                      SelectedItem="{Binding SelectedDatabaseRow}"
+                                      AutoGenerateColumns="True"
+                                      IsReadOnly="True"
+                                      SelectionMode="Extended"
+                                      SelectionUnit="FullRow"
+                                      CanUserAddRows="False"
+                                      CanUserDeleteRows="False"
+                                      FontSize="15"
+                                      Background="{StaticResource AppBackgroundBrush}"
+                                      Foreground="{StaticResource AccentBrush}"
+                                      BorderBrush="{StaticResource AccentOrangeBrush}"
+                                      RowBackground="{StaticResource AppBackgroundBrush}"
+                                      AlternatingRowBackground="{StaticResource PanelAltBackgroundBrush}"
+                                      HorizontalGridLinesBrush="{StaticResource BorderBrushStrong}"
+                                      VerticalGridLinesBrush="{StaticResource BorderBrushStrong}"
+                                      HeadersVisibility="Column"
+                                      GridLinesVisibility="Horizontal"
+                                      RowHeaderWidth="0"
+                                      PreviewKeyDown="DatabaseGrid_KeyDown">
+                                <DataGrid.ColumnHeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Foreground" Value="{StaticResource AppBackgroundBrush}" />
+                                        <Setter Property="FontSize" Value="15" />
+                                        <Setter Property="FontWeight" Value="Bold" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentOrangeBrush}" />
+                                        <Setter Property="BorderThickness" Value="0,0,0,1" />
+                                        <Setter Property="Padding" Value="8,6" />
+                                    </Style>
+                                </DataGrid.ColumnHeaderStyle>
+                                <DataGrid.CellStyle>
+                                    <Style TargetType="DataGridCell">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Background" Value="Transparent" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrushStrong}" />
+                                        <Setter Property="Padding" Value="6,4" />
+                                        <Style.Triggers>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource AccentOrangeBrush}" />
+                                                <Setter Property="Foreground" Value="{StaticResource AppBackgroundBrush}" />
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DataGrid.CellStyle>
+                            </DataGrid>
+                        </Grid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="Ultra"
+                     IsEnabled="{Binding IsDatabaseConnected}">
+                <Grid Margin="12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="340" />
+                        <ColumnDefinition Width="16" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Row="0"
+                            Grid.Column="0"
+                            Grid.ColumnSpan="3"
+                            Padding="12"
+                            Background="{StaticResource PanelBackgroundBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8">
+                        <StackPanel Orientation="Horizontal">
+                            <Button MinWidth="170"
+                                    Margin="0,0,12,0"
+                                    Padding="14,8"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Acquisisci test ADB"
+                                    Click="CaptureUltraTest_Click" />
+                            <Button MinWidth="130"
+                                    Margin="0,0,12,0"
+                                    Padding="14,8"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Apri cartella test"
+                                    Click="OpenUltraTestFolder_Click" />
+                            <Button MinWidth="150"
+                                    Margin="0,0,12,0"
+                                    Padding="14,8"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Apri preview Ultra"
+                                    Click="OpenUltraPreview_Click" />
+                            <Button MinWidth="190"
+                                    Margin="0,0,12,0"
+                                    Padding="14,8"
+                                    FontSize="14"
+                                    FontWeight="Bold"
+                                    Content="Promuovi detection"
+                                    Click="PromoteUltraDetections_Click" />
+                            <StackPanel>
+                                <TextBlock FontWeight="SemiBold"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           Text="Modello detection" />
+                                <TextBlock Margin="0,4,0,0"
+                                           Width="760"
+                                           Foreground="{StaticResource ForegroundMutedBrush}"
+                                           Text="{Binding UltraTab.ModelPath}"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                      <Grid Grid.Row="1"
+                            Grid.Column="0"
+                            Margin="0,12,0,0">
+                          <Grid.RowDefinitions>
+                              <RowDefinition Height="*" />
+                              <RowDefinition Height="12" />
+                              <RowDefinition Height="*" />
+                              <RowDefinition Height="12" />
+                              <RowDefinition Height="*" />
+                          </Grid.RowDefinitions>
+
+                            <GroupBox Header="Immagini test">
+                                <ListBox ItemsSource="{Binding UltraTab.TestImages}"
+                                         SelectedItem="{Binding UltraTab.SelectedTestImage}"
+                                         KeyDown="UltraTestImages_KeyDown"
+                                         SelectionChanged="UltraTestImages_SelectionChanged">
+                                  <ListBox.ItemTemplate>
+                                      <DataTemplate>
+                                          <TextBlock Text="{Binding FileName}" TextWrapping="Wrap" />
+                                      </DataTemplate>
+                                  </ListBox.ItemTemplate>
+                              </ListBox>
+                          </GroupBox>
+
+                            <GroupBox Grid.Row="2"
+                                      Header="Dataset train">
+                                <ListBox ItemsSource="{Binding UltraTab.TrainImages}"
+                                         SelectedItem="{Binding UltraTab.SelectedTrainImage}"
+                                         KeyDown="UltraTrainImages_KeyDown"
+                                         SelectionChanged="UltraTrainImages_SelectionChanged">
+                                  <ListBox.ItemTemplate>
+                                      <DataTemplate>
+                                          <TextBlock Text="{Binding FileName}" TextWrapping="Wrap" />
+                                      </DataTemplate>
+                                  </ListBox.ItemTemplate>
+                              </ListBox>
+                          </GroupBox>
+
+                            <GroupBox Grid.Row="4"
+                                      Header="Dataset val">
+                                <ListBox ItemsSource="{Binding UltraTab.ValImages}"
+                                         SelectedItem="{Binding UltraTab.SelectedValImage}"
+                                         KeyDown="UltraValImages_KeyDown"
+                                         SelectionChanged="UltraValImages_SelectionChanged">
+                                  <ListBox.ItemTemplate>
+                                      <DataTemplate>
+                                          <TextBlock Text="{Binding FileName}" TextWrapping="Wrap" />
+                                      </DataTemplate>
+                                  </ListBox.ItemTemplate>
+                              </ListBox>
+                          </GroupBox>
+                      </Grid>
+
+                        <Grid Grid.Row="1"
+                              Grid.Column="2"
+                              Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="160" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+
+                            <Border Padding="12"
+                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                    BorderBrush="{StaticResource BorderBrushStrong}"
+                                    BorderThickness="1"
+                                    CornerRadius="8">
+                                <Image x:Name="UltraPreviewImage"
+                                       Stretch="Uniform"
+                                       Source="{Binding UltraTab.DetectionPreview}" />
+                            </Border>
+
+                            <GroupBox Grid.Row="1"
+                                      Margin="0,12,0,0"
+                                      Header="Detections">
+                                <TextBox Text="{Binding UltraTab.DetectionsSummary, Mode=OneWay}"
+                                         IsReadOnly="True"
+                                         AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Background="{StaticResource AppBackgroundBrush}"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     BorderBrush="{StaticResource AccentOrangeBrush}"
+                                     FontFamily="Consolas"
+                                     FontSize="12"
+                                     TextWrapping="Wrap" />
+                        </GroupBox>
+
+                            <TextBlock Grid.Row="2"
+                                       Margin="0,12,0,0"
+                                       Foreground="{StaticResource ForegroundMutedBrush}"
+                                       Text="{Binding UltraTab.StatusText}"
+                                       TextWrapping="Wrap" />
+                      </Grid>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>
