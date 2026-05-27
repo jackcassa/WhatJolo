@@ -1021,11 +1021,25 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public void RefreshProjects()
     {
+        var previousSelection = SelectedProjectName;
         ProjectNames.Clear();
         foreach (var projectName in _workspaceService.GetProjectNames())
         {
             ProjectNames.Add(projectName);
         }
+
+        if (ProjectNames.Count == 0)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(previousSelection) && ProjectNames.Contains(previousSelection))
+        {
+            SelectedProjectName = previousSelection;
+            return;
+        }
+
+        SelectedProjectName = ProjectNames.First();
     }
 
     public async Task CreateOrSelectProjectAsync(string projectName)
@@ -1464,6 +1478,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             await ReloadDatabaseConnectionAsync();
 
             IsDatabaseConnected = true;
+            RefreshProjects();
+            if (ProjectNames.Count > 0 && !ProjectNames.Contains(SelectedProjectName))
+            {
+                SelectedProjectName = ProjectNames.First();
+            }
 
             DbInstanceStatus = $"Connessione riuscita. Applicazione progetto {SelectedProjectName}...";
             await Task.Yield();

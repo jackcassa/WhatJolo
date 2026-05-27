@@ -19,6 +19,38 @@ internal sealed class ProjectWorkspaceService
     {
         Directory.CreateDirectory(ProjectsRootPath);
 
+        if (SharedDatabase.IsDatabaseConnected())
+        {
+            SharedDatabase.EnsureDatabaseReady();
+            EnsureProjectInfoTable();
+
+            using var connection = SharedDatabase.CreateConnection();
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT ProjectName
+                FROM ProjectInfo
+                ORDER BY ProjectName;
+                """;
+
+            var databaseProjects = new List<string>();
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var projectName = reader.GetString(0)?.Trim();
+                if (!string.IsNullOrWhiteSpace(projectName))
+                {
+                    databaseProjects.Add(projectName);
+                }
+            }
+
+            if (databaseProjects.Count > 0)
+            {
+                return databaseProjects;
+            }
+        }
+
         return Directory
             .GetDirectories(ProjectsRootPath)
             .Select(Path.GetFileName)
