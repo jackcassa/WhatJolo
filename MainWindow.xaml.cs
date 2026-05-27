@@ -262,11 +262,12 @@ public partial class MainWindow : System.Windows.Window
         {
             var result = await _viewModel.SaveBestOnnxToDatabaseAsync();
             _viewModel.AdbCaptureTab.SetStatusMessage(
-                $"[{result.ProjectName}] best.onnx salvato nel DB: {result.ByteLength:N0} byte -> {result.CompressedLength:N0} byte compressi.");
+                $"[{result.ProjectName}/{result.ClassName}] best.onnx salvato nel DB: {result.ByteLength:N0} byte -> {result.CompressedLength:N0} byte compressi.");
             MessageBox.Show(
                 this,
                 $"ONNX salvato nel DB.{Environment.NewLine}{Environment.NewLine}" +
                 $"Progetto: {result.ProjectName}{Environment.NewLine}" +
+                $"Classe: {result.ClassName}{Environment.NewLine}" +
                 $"Run: {result.RunName}{Environment.NewLine}" +
                 $"File: {result.ModelFileName}{Environment.NewLine}" +
                 $"Originale: {result.ByteLength:N0} byte{Environment.NewLine}" +
@@ -905,7 +906,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string SelectedCropClass
     {
         get => _selectedCropClass;
-        set => SetField(ref _selectedCropClass, value);
+        set
+        {
+            if (!SetField(ref _selectedCropClass, value))
+            {
+                return;
+            }
+
+            UltraTab.SetCurrentProject(SelectedProjectName, _selectedCropClass);
+        }
     }
 
     public string SelectedProjectName
@@ -1147,7 +1156,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         await AdbCaptureTab.SetCurrentProjectAsync(SelectedProjectName, SelectedCropClass);
-        UltraTab.SetCurrentProject(SelectedProjectName);
+        UltraTab.SetCurrentProject(SelectedProjectName, SelectedCropClass);
         StatusText = $"Progetto corrente: {SelectedProjectName} | PostgreSQL non connesso";
     }
 
@@ -1201,7 +1210,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             await SelectCropClassForProjectAsync(ensuredName);
         }
         await AdbCaptureTab.SetCurrentProjectAsync(ensuredName, SelectedCropClass);
-        UltraTab.SetCurrentProject(ensuredName);
+        UltraTab.SetCurrentProject(ensuredName, SelectedCropClass);
         StatusText = IsDatabaseConnected
             ? $"Tabelle lette: {Tables.Count} | Progetto corrente: {ensuredName} | Classi: {ActiveProjectClassesSummary}"
             : $"Progetto corrente: {ensuredName} | PostgreSQL non connesso";
@@ -1272,9 +1281,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     public async Task<ProjectModelBlobSaveResult> SaveBestOnnxToDatabaseAsync()
     {
-        var result = await _projectModelBlobService.SaveBestOnnxAsync(SelectedProjectName);
+        var result = await _projectModelBlobService.SaveBestOnnxAsync(SelectedProjectName, SelectedCropClass);
         StatusText =
-            $"best.onnx salvato nel DB | Progetto: {result.ProjectName} | " +
+            $"best.onnx salvato nel DB | Progetto: {result.ProjectName} | Classe: {result.ClassName} | " +
             $"Originale: {result.ByteLength:N0} byte | Compresso: {result.CompressedLength:N0} byte";
         return result;
     }
@@ -1396,10 +1405,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             case "projectmodelblob":
                 command.CommandText =
                     """
-                    SELECT Id, ProjectName, ModelFileName, ModelKind, RunName, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
+                    SELECT Id, ProjectName, ClassName, ModelFileName, ModelKind, RunName, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
                     FROM ProjectModelBlob
                     WHERE ProjectName = @ProjectName
-                    ORDER BY UpdatedAtUtc DESC, Id DESC;
+                    ORDER BY ClassName, UpdatedAtUtc DESC, Id DESC;
                     """;
                 AddParameter(command, "@ProjectName", SelectedProjectName);
                 filterMode = $"filtrato per progetto '{SelectedProjectName}'";

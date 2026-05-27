@@ -19,6 +19,7 @@ public sealed class UltraTabViewModel : ViewModelBase
     private readonly ProjectWorkspaceService _workspaceService;
     private readonly YoloTrainingService _yoloTrainingService;
     private string _currentProjectName;
+    private string _currentClassName;
     private TestImageItem? _selectedTestImage;
     private TestImageItem? _selectedTrainImage;
     private TestImageItem? _selectedValImage;
@@ -40,6 +41,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         _workspaceService = new ProjectWorkspaceService();
         _yoloTrainingService = new YoloTrainingService();
         _currentProjectName = "Default";
+        _currentClassName = "cerca";
         _statusText = "Pronto.";
         _modelPath = "Modello ONNX non trovato.";
         _selectedModelSource = ModelSourceLatestLocal;
@@ -125,9 +127,10 @@ public sealed class UltraTabViewModel : ViewModelBase
         private set => SetField(ref _detectionsSummary, value);
     }
 
-    public void SetCurrentProject(string projectName)
+    public void SetCurrentProject(string projectName, string className)
     {
         _currentProjectName = projectName;
+        _currentClassName = string.IsNullOrWhiteSpace(className) ? "cerca" : className.Trim();
         ModelPath = DetectModelPath();
         LoadAllImages();
         DetectionPreview = null;
@@ -135,7 +138,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         _lastDetectionImagePath = string.Empty;
         _lastDetectionSourceName = string.Empty;
         _lastDetections = Array.Empty<YoloDetection>();
-        StatusText = $"[{_currentProjectName}] Tab Ultra pronta.";
+        StatusText = $"[{_currentProjectName}/{_currentClassName}] Tab Ultra pronta.";
     }
 
     public string GetTestFolderPath()
@@ -648,7 +651,7 @@ public sealed class UltraTabViewModel : ViewModelBase
     {
         if (IsDatabaseModelSourceSelected())
         {
-            return "DB: best.onnx salvato nel database remoto (scompattato in temp alla detection).";
+            return $"DB: best.onnx salvato nel database remoto per classe '{_currentClassName}' (scompattato in temp alla detection).";
         }
 
         var latestOnnxPath = _workspaceService.FindLatestYoloOnnxPath(_currentProjectName);
@@ -673,9 +676,9 @@ public sealed class UltraTabViewModel : ViewModelBase
             return DetectModelPath();
         }
 
-        var restoreResult = await _projectModelBlobService.RestoreLatestBestOnnxToTempAsync(_currentProjectName);
+        var restoreResult = await _projectModelBlobService.RestoreLatestBestOnnxToTempAsync(_currentProjectName, _currentClassName);
         ModelPath =
-            $"DB temp: {restoreResult.ModelPath} | Run: {restoreResult.RunName} | " +
+            $"DB temp: {restoreResult.ModelPath} | Classe: {restoreResult.ClassName} | Run: {restoreResult.RunName} | " +
             $"{restoreResult.ByteLength:N0} byte -> {restoreResult.CompressedLength:N0} byte compressi";
         return restoreResult.ModelPath;
     }

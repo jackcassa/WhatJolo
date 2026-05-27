@@ -9,13 +9,14 @@ internal sealed class ProjectModelBlobService
 {
     private readonly ProjectWorkspaceService _workspaceService = new();
 
-    public async Task<ProjectModelBlobSaveResult> SaveBestOnnxAsync(string projectName)
+    public async Task<ProjectModelBlobSaveResult> SaveBestOnnxAsync(string projectName, string className)
     {
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
+        var normalizedClassName = NormalizeClassName(className);
         var onnxPath = _workspaceService.FindLatestYoloOnnxPath(normalizedProjectName);
         if (string.IsNullOrWhiteSpace(onnxPath) || !File.Exists(onnxPath))
         {
-            throw new FileNotFoundException($"best.onnx non trovato per il progetto {normalizedProjectName}.");
+            throw new FileNotFoundException($"best.onnx non trovato per il progetto {normalizedProjectName}, classe {normalizedClassName}.");
         }
 
         EnsureTable();
@@ -34,6 +35,7 @@ internal sealed class ProjectModelBlobService
             INSERT INTO ProjectModelBlob
             (
                 ProjectName,
+                ClassName,
                 ModelFileName,
                 ModelKind,
                 RunName,
@@ -46,6 +48,7 @@ internal sealed class ProjectModelBlobService
             VALUES
             (
                 @ProjectName,
+                @ClassName,
                 @ModelFileName,
                 @ModelKind,
                 @RunName,
@@ -55,7 +58,7 @@ internal sealed class ProjectModelBlobService
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
-            ON CONFLICT(ProjectName, ModelKind) DO UPDATE SET
+            ON CONFLICT(ProjectName, ClassName, ModelKind) DO UPDATE SET
                 ModelFileName = excluded.ModelFileName,
                 RunName = excluded.RunName,
                 ContentHash = excluded.ContentHash,
@@ -64,6 +67,7 @@ internal sealed class ProjectModelBlobService
                 UpdatedAtUtc = CURRENT_TIMESTAMP;
             """;
         AddParameter(command, "@ProjectName", normalizedProjectName);
+        AddParameter(command, "@ClassName", normalizedClassName);
         AddParameter(command, "@ModelFileName", fileName);
         AddParameter(command, "@ModelKind", "best.onnx");
         AddParameter(command, "@RunName", runName);
@@ -74,6 +78,7 @@ internal sealed class ProjectModelBlobService
 
         return new ProjectModelBlobSaveResult(
             normalizedProjectName,
+            normalizedClassName,
             onnxPath,
             fileName,
             runName,
@@ -82,9 +87,10 @@ internal sealed class ProjectModelBlobService
             contentHash);
     }
 
-    public async Task<ProjectModelBlobRestoreResult> RestoreLatestBestOnnxToTempAsync(string projectName)
+    public async Task<ProjectModelBlobRestoreResult> RestoreLatestBestOnnxToTempAsync(string projectName, string className)
     {
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
+        var normalizedClassName = NormalizeClassName(className);
         EnsureTable();
 
         if (!SharedDatabase.IsDatabaseConnected())
@@ -100,17 +106,19 @@ internal sealed class ProjectModelBlobService
             SELECT ModelFileName, RunName, ContentHash, ByteLength, CompressedBytes
             FROM ProjectModelBlob
             WHERE ProjectName = @ProjectName
+              AND ClassName = @ClassName
               AND ModelKind = @ModelKind
             ORDER BY UpdatedAtUtc DESC, Id DESC
             LIMIT 1;
             """;
         AddParameter(command, "@ProjectName", normalizedProjectName);
+        AddParameter(command, "@ClassName", normalizedClassName);
         AddParameter(command, "@ModelKind", "best.onnx");
 
         await using var reader = await command.ExecuteReaderAsync();
         if (!await reader.ReadAsync())
         {
-            throw new FileNotFoundException($"Nessun best.onnx salvato nel DB per il progetto {normalizedProjectName}.");
+            throw new FileNotFoundException($"Nessun best.onnx salvato nel DB per il progetto {normalizedProjectName}, classe {normalizedClassName}.");
         }
 
         var modelFileName = reader.GetString(0);
@@ -135,6 +143,7 @@ internal sealed class ProjectModelBlobService
             "WhatJolo",
             "ProjectModelBlob",
             SanitizePathSegment(normalizedProjectName),
+            SanitizePathSegment(normalizedClassName),
             contentHash[..Math.Min(contentHash.Length, 16)]);
         Directory.CreateDirectory(tempFolder);
 
@@ -144,6 +153,7 @@ internal sealed class ProjectModelBlobService
 
         return new ProjectModelBlobRestoreResult(
             normalizedProjectName,
+            normalizedClassName,
             outputPath,
             modelFileName,
             runName,
@@ -194,6 +204,17 @@ internal sealed class ProjectModelBlobService
         return string.IsNullOrWhiteSpace(safeValue) ? "Project" : safeValue;
     }
 
+    private static string NormalizeClassName(string className)
+    {
+        var normalizedClassName = className.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedClassName))
+        {
+            throw new ArgumentException("Classe modello non valida.", nameof(className));
+        }
+
+        return normalizedClassName;
+    }
+
     private static void AddParameter(DbCommand command, string name, object value)
     {
         var parameter = command.CreateParameter();
@@ -218,6 +239,7 @@ internal sealed class ProjectModelBlobService
             (
                 Id BIGSERIAL PRIMARY KEY,
                 ProjectName TEXT NOT NULL,
+                ClassName TEXT NOT NULL DEFAULT '',
                 ModelFileName TEXT NOT NULL,
                 ModelKind TEXT NOT NULL,
                 RunName TEXT NOT NULL,
@@ -229,8 +251,17 @@ internal sealed class ProjectModelBlobService
                 UNIQUE(ProjectName, ModelKind)
             );
 
+            ALTER TABLE ProjectModelBlob
+                ADD COLUMN IF NOT EXISTS ClassName TEXT NOT NULL DEFAULT '';
+
+            ALTER TABLE ProjectModelBlob
+                DROP CONSTRAINT IF EXISTS projectmodelblob_projectname_modelkind_key;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS IX_ProjectModelBlob_ProjectName_ClassName_ModelKind
+                ON ProjectModelBlob(ProjectName, ClassName, ModelKind);
+
             CREATE INDEX IF NOT EXISTS IX_ProjectModelBlob_ProjectName
-                ON ProjectModelBlob(ProjectName, UpdatedAtUtc DESC);
+                ON ProjectModelBlob(ProjectName, ClassName, UpdatedAtUtc DESC);
             """;
         command.ExecuteNonQuery();
     }
@@ -238,6 +269,7 @@ internal sealed class ProjectModelBlobService
 
 public sealed record ProjectModelBlobSaveResult(
     string ProjectName,
+    string ClassName,
     string ModelPath,
     string ModelFileName,
     string RunName,
@@ -247,6 +279,7 @@ public sealed record ProjectModelBlobSaveResult(
 
 public sealed record ProjectModelBlobRestoreResult(
     string ProjectName,
+    string ClassName,
     string ModelPath,
     string ModelFileName,
     string RunName,
