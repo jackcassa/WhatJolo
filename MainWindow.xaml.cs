@@ -306,7 +306,6 @@ public partial class MainWindow : System.Windows.Window
 
         await _viewModel.CreateOrSelectProjectAsync(prompt.EnteredText);
         CloseAdbPreviewWindow();
-        await _viewModel.AlignProjectImageBlobsAsync();
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
     }
 
@@ -329,7 +328,6 @@ public partial class MainWindow : System.Windows.Window
 
         await _viewModel.ApplySelectedProjectAsync();
         CloseAdbPreviewWindow();
-        await _viewModel.AlignProjectImageBlobsAsync();
         await _viewModel.LoadDatabaseTableAsync(_viewModel.SelectedDatabaseTable);
     }
 
@@ -1487,10 +1485,6 @@ public sealed class MainWindowViewModel : ViewModelBase
             DbInstanceStatus = $"Connessione riuscita. Applicazione progetto {SelectedProjectName}...";
             await Task.Yield();
             await ApplySelectedProjectAsync();
-
-            DbInstanceStatus = $"Allineamento blob immagini del progetto {SelectedProjectName}...";
-            await Task.Yield();
-            await AlignProjectImageBlobsAsync();
 
             DbInstanceStatus = $"Connesso a PostgreSQL su {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.";
         }
