@@ -81,6 +81,19 @@ internal sealed class AdbService
         return bytes;
     }
 
+    public async Task TapAsync(string deviceSerial, int x, int y)
+    {
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            throw new InvalidOperationException("Nessun device ADB selezionato.");
+        }
+
+        var clampedX = Math.Max(0, x);
+        var clampedY = Math.Max(0, y);
+        var result = await RunAdbAsync($"-s {deviceSerial} shell input tap {clampedX} {clampedY}");
+        EnsureSuccess(result, "adb shell input tap");
+    }
+
     private async Task<AdbCommandResult> RunAdbAsync(string arguments)
     {
         var startInfo = new ProcessStartInfo

@@ -266,6 +266,44 @@ public sealed class UltraTabViewModel : ViewModelBase
         await DetectImageAsync(new TestImageItem(outputPath, Path.GetFileName(outputPath)), "preview adb");
     }
 
+    public async Task TapBestPreviewDetectionAsync(string? deviceSerial)
+    {
+        if (!_adbService.Exists())
+        {
+            StatusText = "ADB non trovato.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            StatusText = "Nessun device ADB selezionato.";
+            return;
+        }
+
+        if (!string.Equals(_lastDetectionSourceName, "preview adb", StringComparison.OrdinalIgnoreCase))
+        {
+            StatusText = $"[{_currentProjectName}] Esegui prima 'Acquisisci ADB e riconosci' nella preview.";
+            return;
+        }
+
+        var bestDetection = _lastDetections
+            .Where(d => !string.IsNullOrWhiteSpace(d.Label))
+            .OrderByDescending(d => d.Confidence)
+            .FirstOrDefault();
+
+        if (bestDetection == null)
+        {
+            StatusText = $"[{_currentProjectName}] Nessun oggetto riconosciuto da toccare.";
+            return;
+        }
+
+        var tapX = bestDetection.Bounds.Left + (bestDetection.Bounds.Width / 2);
+        var tapY = bestDetection.Bounds.Top + (bestDetection.Bounds.Height / 2);
+        StatusText = $"[{_currentProjectName}] Tap ADB in corso su {bestDetection.Label} ({bestDetection.Confidence:P0}) @ {tapX},{tapY}...";
+        await _adbService.TapAsync(deviceSerial, tapX, tapY);
+        StatusText = $"[{_currentProjectName}] Tap ADB eseguito su {bestDetection.Label} ({bestDetection.Confidence:P0}) @ {tapX},{tapY}.";
+    }
+
     public async Task DetectSelectedImageAsync()
     {
         if (SelectedTestImage != null)

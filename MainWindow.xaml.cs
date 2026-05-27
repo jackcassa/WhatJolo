@@ -297,6 +297,11 @@ public partial class MainWindow : System.Windows.Window
         await _viewModel.UltraTab.CaptureAdbPreviewAndDetectAsync(_viewModel.AdbCaptureTab.SelectedDeviceSerial);
     }
 
+    private async void UltraPreview_TapRequested(object? sender, EventArgs e)
+    {
+        await _viewModel.UltraTab.TapBestPreviewDetectionAsync(_viewModel.AdbCaptureTab.SelectedDeviceSerial);
+    }
+
     private void OpenUltraTestFolder_Click(object sender, RoutedEventArgs e)
     {
         OpenInExplorer(_viewModel.UltraTab.GetTestFolderPath());
@@ -633,13 +638,14 @@ public partial class MainWindow : System.Windows.Window
                 Top = Top + 40
             };
             _ultraPreviewWindow.CaptureAndDetectRequested += UltraPreview_CaptureAndDetectRequested;
+            _ultraPreviewWindow.TapRequested += UltraPreview_TapRequested;
             _ultraPreviewWindow.Closed += (_, _) =>
             {
                 if (_ultraPreviewWindow != null)
                 {
                     _ultraPreviewWindow.CaptureAndDetectRequested -= UltraPreview_CaptureAndDetectRequested;
+                    _ultraPreviewWindow.TapRequested -= UltraPreview_TapRequested;
                 }
-
                 _ultraPreviewWindow = null;
             };
             _ultraPreviewWindow.Show();

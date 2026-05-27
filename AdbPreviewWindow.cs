@@ -3,7 +3,9 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.ComponentModel;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace WhatJolo;
 
@@ -11,19 +13,26 @@ internal sealed class AdbPreviewWindow : Window
 {
     private readonly ScrollViewer _scrollViewer;
     private readonly Grid _previewHost;
+    private readonly Border _previewBorder;
     private readonly Image _previewImage;
     private readonly Canvas _selectionCanvas;
     private readonly Rectangle _selectionRectangle;
     private readonly ScaleTransform _scaleTransform;
+    private readonly TranslateTransform _translateTransform;
     private readonly PreviewSelectionController _selectionController;
-    private double _zoom = 1.0;
+    private double _fitZoom = 1.0;
+    private int _zoomLevel;
+    private bool _isAdjustingWindowSize;
+    private double _imageAspectRatio = 1.0;
+    private double _lastWindowWidth;
+    private double _lastWindowHeight;
 
     public AdbPreviewWindow()
     {
         Title = "WhatJolo ADB Preview";
         Width = 1200;
         Height = 900;
-        MinWidth = 720;
+        MinWidth = 420;
         MinHeight = 540;
         WindowStartupLocation = WindowStartupLocation.Manual;
         ShowActivated = false;
@@ -68,7 +77,7 @@ internal sealed class AdbPreviewWindow : Window
         headerBorder.Child = headerStack;
         root.Children.Add(headerBorder);
 
-        var previewBorder = new Border
+        _previewBorder = new Border
         {
             Margin = new Thickness(0, 12, 0, 0),
             CornerRadius = new CornerRadius(10),
@@ -76,13 +85,22 @@ internal sealed class AdbPreviewWindow : Window
             BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 64)),
             Background = new SolidColorBrush(Color.FromRgb(16, 16, 16))
         };
-        Grid.SetRow(previewBorder, 1);
+        Grid.SetRow(_previewBorder, 1);
+        _previewBorder.SizeChanged += PreviewBorder_SizeChanged;
 
         _previewHost = new Grid();
         _previewHost.SizeChanged += PreviewHost_SizeChanged;
 
         _scaleTransform = new ScaleTransform(1.0, 1.0);
-        _previewHost.RenderTransform = _scaleTransform;
+        _translateTransform = new TranslateTransform(0, 0);
+        _previewHost.RenderTransform = new TransformGroup
+        {
+            Children = new TransformCollection
+            {
+                _scaleTransform,
+                _translateTransform
+            }
+        };
         _previewHost.RenderTransformOrigin = new Point(0, 0);
 
         _previewImage = new Image
@@ -90,6 +108,7 @@ internal sealed class AdbPreviewWindow : Window
             Stretch = Stretch.None
         };
         _previewImage.SetBinding(Image.SourceProperty, new Binding("LatestScreenshotPreview"));
+        _previewImage.SizeChanged += PreviewImage_SizeChanged;
         _previewImage.PreviewMouseWheel += PreviewSurface_PreviewMouseWheel;
         _previewImage.MouseLeftButtonDown += PreviewImage_MouseLeftButtonDown;
         _previewHost.Children.Add(_previewImage);
@@ -136,8 +155,8 @@ internal sealed class AdbPreviewWindow : Window
             Content = _previewHost,
             Padding = new Thickness(12)
         };
-        previewBorder.Child = _scrollViewer;
-        root.Children.Add(previewBorder);
+        _previewBorder.Child = _scrollViewer;
+        root.Children.Add(_previewBorder);
 
         var statusBorder = new Border
         {
@@ -159,8 +178,16 @@ internal sealed class AdbPreviewWindow : Window
         statusBorder.Child = statusText;
         root.Children.Add(statusBorder);
 
+        SizeChanged += AdbPreviewWindow_SizeChanged;
+        Loaded += AdbPreviewWindow_Loaded;
         MouseWheel += PreviewSurface_PreviewMouseWheel;
         Content = root;
+        _lastWindowWidth = Width;
+        _lastWindowHeight = Height;
+
+        DependencyPropertyDescriptor
+            .FromProperty(Image.SourceProperty, typeof(Image))
+            ?.AddValueChanged(_previewImage, (_, _) => HandleImageSourceChanged());
     }
 
     public Int32Rect? SelectedPixelRect => _selectionController.SelectedPixelRect;
@@ -187,23 +214,24 @@ internal sealed class AdbPreviewWindow : Window
             return;
         }
 
-        var previousZoom = _zoom;
-        _zoom = e.Delta > 0 ? Math.Min(8.0, _zoom * 1.15) : Math.Max(0.2, _zoom / 1.15);
-        if (Math.Abs(_zoom - previousZoom) < 0.0001)
+        var previousEffectiveZoom = GetEffectiveZoom();
+        var previousZoomLevel = _zoomLevel;
+        _zoomLevel = e.Delta > 0 ? Math.Min(18, _zoomLevel + 1) : Math.Max(-10, _zoomLevel - 1);
+        if (_zoomLevel == previousZoomLevel)
         {
             return;
         }
 
         var mousePosition = e.GetPosition(_scrollViewer);
-        var relativeX = (_scrollViewer.HorizontalOffset + mousePosition.X) / Math.Max(1.0, _previewHost.ActualWidth * previousZoom);
-        var relativeY = (_scrollViewer.VerticalOffset + mousePosition.Y) / Math.Max(1.0, _previewHost.ActualHeight * previousZoom);
+        var relativeX = (_scrollViewer.HorizontalOffset + mousePosition.X) / Math.Max(1.0, _previewHost.ActualWidth * previousEffectiveZoom);
+        var relativeY = (_scrollViewer.VerticalOffset + mousePosition.Y) / Math.Max(1.0, _previewHost.ActualHeight * previousEffectiveZoom);
 
-        _scaleTransform.ScaleX = _zoom;
-        _scaleTransform.ScaleY = _zoom;
+        ApplyZoom();
         UpdateLayout();
 
-        _scrollViewer.ScrollToHorizontalOffset(Math.Max(0, (_previewHost.ActualWidth * _zoom * relativeX) - mousePosition.X));
-        _scrollViewer.ScrollToVerticalOffset(Math.Max(0, (_previewHost.ActualHeight * _zoom * relativeY) - mousePosition.Y));
+        var effectiveZoom = GetEffectiveZoom();
+        _scrollViewer.ScrollToHorizontalOffset(Math.Max(0, (_previewHost.ActualWidth * effectiveZoom * relativeX) - mousePosition.X));
+        _scrollViewer.ScrollToVerticalOffset(Math.Max(0, (_previewHost.ActualHeight * effectiveZoom * relativeY) - mousePosition.Y));
         e.Handled = true;
     }
 
@@ -220,17 +248,81 @@ internal sealed class AdbPreviewWindow : Window
 
     private void ResetZoom()
     {
-        _zoom = 1.0;
-        _scaleTransform.ScaleX = 1.0;
-        _scaleTransform.ScaleY = 1.0;
+        _zoomLevel = 0;
+        UpdateFitZoom();
+        ApplyZoom();
         UpdateLayout();
         _scrollViewer.ScrollToHorizontalOffset(0);
         _scrollViewer.ScrollToVerticalOffset(0);
     }
 
+    private void PreviewBorder_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateFitZoom();
+    }
+
+    private void PreviewImage_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdateFitZoom();
+    }
+
     private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e)
     {
         _selectionController.HandlePreviewSizeChanged();
+    }
+
+    private void AdbPreviewWindow_Loaded(object sender, RoutedEventArgs e)
+    {
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            HandleImageSourceChanged();
+            UpdateFitZoom();
+            ResetWindowToImageAspect();
+        }), DispatcherPriority.Loaded);
+    }
+
+    private void AdbPreviewWindow_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_isAdjustingWindowSize || _previewBorder.ActualWidth <= 0 || _previewBorder.ActualHeight <= 0 || _imageAspectRatio <= 0)
+        {
+            _lastWindowWidth = ActualWidth;
+            _lastWindowHeight = ActualHeight;
+            return;
+        }
+
+        var widthDelta = Math.Abs(ActualWidth - _lastWindowWidth);
+        var heightDelta = Math.Abs(ActualHeight - _lastWindowHeight);
+        var chromeWidth = Math.Max(0, ActualWidth - _previewBorder.ActualWidth);
+        var chromeHeight = Math.Max(0, ActualHeight - _previewBorder.ActualHeight);
+
+        _isAdjustingWindowSize = true;
+        try
+        {
+            if (widthDelta >= heightDelta)
+            {
+                var previewWidth = Math.Max(240, ActualWidth - chromeWidth);
+                var targetHeight = chromeHeight + (previewWidth / _imageAspectRatio);
+                if (!double.IsNaN(targetHeight) && !double.IsInfinity(targetHeight))
+                {
+                    Height = Math.Max(MinHeight, targetHeight);
+                }
+            }
+            else
+            {
+                var previewHeight = Math.Max(180, ActualHeight - chromeHeight);
+                var targetWidth = chromeWidth + (previewHeight * _imageAspectRatio);
+                if (!double.IsNaN(targetWidth) && !double.IsInfinity(targetWidth))
+                {
+                    Width = Math.Max(MinWidth, targetWidth);
+                }
+            }
+        }
+        finally
+        {
+            _isAdjustingWindowSize = false;
+            _lastWindowWidth = ActualWidth;
+            _lastWindowHeight = ActualHeight;
+        }
     }
 
     private void SelectionCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -246,5 +338,143 @@ internal sealed class AdbPreviewWindow : Window
     private void SelectionCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         _selectionController.HandleMouseUp(e);
+    }
+
+    private void UpdateFitZoom()
+    {
+        if (_previewImage.Source is not ImageSource source)
+        {
+            _fitZoom = 1.0;
+            ApplyZoom();
+            return;
+        }
+
+        var viewportWidth = Math.Max(1.0, _previewBorder.ActualWidth - 24);
+        var viewportHeight = Math.Max(1.0, _previewBorder.ActualHeight - 24);
+        var contentWidth = Math.Max(1.0, GetSourceWidth(source));
+        var contentHeight = Math.Max(1.0, GetSourceHeight(source));
+
+        _fitZoom = Math.Min(viewportWidth / contentWidth, viewportHeight / contentHeight);
+        if (double.IsNaN(_fitZoom) || double.IsInfinity(_fitZoom) || _fitZoom <= 0)
+        {
+            _fitZoom = 1.0;
+        }
+
+        ApplyZoom();
+    }
+
+    private double GetEffectiveZoom()
+    {
+        return _fitZoom * Math.Pow(1.15, _zoomLevel);
+    }
+
+    private void ApplyZoom()
+    {
+        var zoom = GetEffectiveZoom();
+        _scaleTransform.ScaleX = zoom;
+        _scaleTransform.ScaleY = zoom;
+        UpdateCenteringOffset();
+    }
+
+    private void HandleImageSourceChanged()
+    {
+        if (_previewImage.Source is not ImageSource source)
+        {
+            return;
+        }
+
+        var width = GetSourceWidth(source);
+        var height = GetSourceHeight(source);
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        _imageAspectRatio = width / height;
+        _previewImage.Width = width;
+        _previewImage.Height = height;
+        _previewHost.Width = width;
+        _previewHost.Height = height;
+        _selectionCanvas.Width = width;
+        _selectionCanvas.Height = height;
+
+        ResetZoom();
+        ResetWindowToImageAspect();
+    }
+
+    private void UpdateCenteringOffset()
+    {
+        if (_previewImage.Source is not ImageSource source)
+        {
+            _translateTransform.X = 0;
+            _translateTransform.Y = 0;
+            return;
+        }
+
+        var viewportWidth = Math.Max(1.0, _previewBorder.ActualWidth - 24);
+        var viewportHeight = Math.Max(1.0, _previewBorder.ActualHeight - 24);
+        var contentWidth = GetSourceWidth(source) * GetEffectiveZoom();
+        var contentHeight = GetSourceHeight(source) * GetEffectiveZoom();
+
+        _translateTransform.X = contentWidth < viewportWidth ? (viewportWidth - contentWidth) / 2.0 : 0;
+        _translateTransform.Y = contentHeight < viewportHeight ? (viewportHeight - contentHeight) / 2.0 : 0;
+    }
+
+    private void ResetWindowToImageAspect()
+    {
+        if (_previewBorder.ActualWidth <= 0 || _previewBorder.ActualHeight <= 0 || _imageAspectRatio <= 0)
+        {
+            return;
+        }
+
+        var workArea = SystemParameters.WorkArea;
+        var chromeWidth = Math.Max(0, ActualWidth - _previewBorder.ActualWidth);
+        var chromeHeight = Math.Max(0, ActualHeight - _previewBorder.ActualHeight);
+        var maxWindowWidth = Math.Max(MinWidth, workArea.Width * 0.92);
+        var maxWindowHeight = Math.Max(MinHeight, workArea.Height * 0.92);
+        var availablePreviewWidth = Math.Max(220, maxWindowWidth - chromeWidth);
+        var availablePreviewHeight = Math.Max(220, maxWindowHeight - chromeHeight);
+
+        var previewWidth = availablePreviewWidth;
+        var previewHeight = previewWidth / _imageAspectRatio;
+        if (previewHeight > availablePreviewHeight)
+        {
+            previewHeight = availablePreviewHeight;
+            previewWidth = previewHeight * _imageAspectRatio;
+        }
+
+        var targetWidth = chromeWidth + previewWidth;
+        var targetHeight = chromeHeight + previewHeight;
+
+        _isAdjustingWindowSize = true;
+        try
+        {
+            Width = Math.Max(MinWidth, targetWidth);
+            Height = Math.Max(MinHeight, targetHeight);
+        }
+        finally
+        {
+            _isAdjustingWindowSize = false;
+            _lastWindowWidth = ActualWidth;
+            _lastWindowHeight = ActualHeight;
+        }
+    }
+
+    private static double GetSourceWidth(ImageSource source)
+    {
+        return source switch
+        {
+            System.Windows.Media.Imaging.BitmapSource bitmap when bitmap.PixelWidth > 0 => bitmap.PixelWidth,
+            _ => source.Width
+        };
+    }
+
+    private static double GetSourceHeight(ImageSource source)
+    {
+        return source switch
+        {
+            System.Windows.Media.Imaging.BitmapSource bitmap when bitmap.PixelHeight > 0 => bitmap.PixelHeight,
+            _ => source.Height
+        };
     }
 }
