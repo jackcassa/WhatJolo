@@ -11,10 +11,13 @@ namespace Navigation;
 internal sealed class MainWindowViewModel : ViewModelBase
 {
     private const string SendModelClassName = "cerca";
-    private static readonly string[] RequiredSendModelClasses = ["cerca", "freccia"];
+    private const string SendBackClassName = "back";
+    private static readonly string[] RequiredSendModelClasses = ["cerca", "back"];
     private const float SendDetectionThreshold = 0.05f;
     private const int ImageChangeWaitAttempts = 12;
     private const int ImageChangeWaitDelayMs = 500;
+    private const int TapPauseMs = 3_000;
+    private const int SendLoopDelayMs = 10_000;
 
     private readonly AdbService _adbService;
     private readonly ProjectModelBlobService _projectModelBlobService;
@@ -24,7 +27,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
     private string _statusText;
     private string _selectedProjectName;
     private bool _isDatabaseConnected;
+    private bool _isSendLoopRunning;
     private BitmapSource? _lastCapturePreview;
+    private CancellationTokenSource? _sendLoopCancellationTokenSource;
 
     public MainWindowViewModel()
     {
@@ -97,6 +102,12 @@ internal sealed class MainWindowViewModel : ViewModelBase
         private set => SetField(ref _lastCapturePreview, value);
     }
 
+    public bool IsSendLoopRunning
+    {
+        get => _isSendLoopRunning;
+        private set => SetField(ref _isSendLoopRunning, value);
+    }
+
     public async Task InitializeAsync()
     {
         var settings = SharedDatabase.LoadPostgresSettings();
@@ -115,13 +126,65 @@ internal sealed class MainWindowViewModel : ViewModelBase
         await LoadProjectsAsync();
     }
 
-    public async Task ExecuteSendStep1Async()
+    public async Task StartSendLoopAsync()
+    {
+        if (IsSendLoopRunning)
+        {
+            StatusText = $"[{SelectedProjectName}] Workflow Send già in esecuzione.";
+            return;
+        }
+
+        _sendLoopCancellationTokenSource = new CancellationTokenSource();
+        IsSendLoopRunning = true;
+
+        try
+        {
+            var cycleNumber = 1;
+            while (!_sendLoopCancellationTokenSource.IsCancellationRequested)
+            {
+                await ExecuteSendCycleAsync(cycleNumber, _sendLoopCancellationTokenSource.Token);
+
+                if (_sendLoopCancellationTokenSource.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                StatusText = $"[{SelectedProjectName}] Ciclo Send {cycleNumber} completato. Pausa di 10 secondi prima del prossimo ciclo...";
+                await Task.Delay(SendLoopDelayMs, _sendLoopCancellationTokenSource.Token);
+                cycleNumber++;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = $"[{SelectedProjectName}] Workflow Send fermato.";
+        }
+        finally
+        {
+            _sendLoopCancellationTokenSource?.Dispose();
+            _sendLoopCancellationTokenSource = null;
+            IsSendLoopRunning = false;
+        }
+    }
+
+    public void StopSendLoop()
+    {
+        if (!IsSendLoopRunning || _sendLoopCancellationTokenSource is null)
+        {
+            StatusText = "Workflow Send non in esecuzione.";
+            return;
+        }
+
+        StatusText = $"[{SelectedProjectName}] Arresto workflow Send richiesto...";
+        _sendLoopCancellationTokenSource.Cancel();
+    }
+
+    private async Task ExecuteSendCycleAsync(int cycleNumber, CancellationToken cancellationToken)
     {
         // Step 1 del workflow Send:
         // 1. verifica progetto selezionato e disponibilità di ADB
         // 2. ricostruisce la struttura locale per l'inferenza del progetto selezionato
         //    e delle classi presenti nel progetto, ciascuna nella propria directory
-        // 3. usa quei path locali per i modelli best.onnx di "cerca" e "freccia"
+        // 3. usa quei path locali per i modelli best.onnx di "cerca" e "back"
         // 4. avvia il server ADB
         // 5. legge i device collegati
         // 6. acquisisce uno screenshot PNG dal primo device disponibile
@@ -130,11 +193,13 @@ internal sealed class MainWindowViewModel : ViewModelBase
         // 9. se non trova "cerca" salva l'immagine come priva_<timestamp>.png e ferma il flusso
         // 10. aspetta che l'immagine cambi
         // 11. aggiorna la preview con la nuova immagine
-        // 12. esegue YOLO alla ricerca della classe "freccia"
-        // 13. se trova "freccia" esegue il tap ADB sul bounding box migliore
-        // 14. se non trova "freccia" salva l'immagine come errore_<timestamp>.png e ferma il flusso
-        // 15. dopo il tap su "freccia" aspetta che arrivi una nuova immagine
+        // 12. esegue YOLO alla ricerca della classe "back"
+        // 13. se trova "back" esegue il tap ADB sul bounding box migliore
+        // 14. se non trova "back" salva l'immagine come errore_<timestamp>.png e ferma il flusso
+        // 15. dopo il tap su "back" aspetta che arrivi una nuova immagine
         // 16. aggiorna ancora la preview con la nuova immagine
+        cancellationToken.ThrowIfCancellationRequested();
+
         if (!_adbService.Exists())
         {
             StatusText = "ADB non trovato.";
@@ -150,9 +215,11 @@ internal sealed class MainWindowViewModel : ViewModelBase
         try
         {
             await PrepareInferenceStructureAsync();
+            cancellationToken.ThrowIfCancellationRequested();
             var modelPaths = await EnsureSendModelsAsync();
-            StatusText = $"[{SelectedProjectName}] Avvio ADB...";
+            StatusText = $"[{SelectedProjectName}] Ciclo Send {cycleNumber}: avvio ADB...";
             await _adbService.StartServerAsync();
+            cancellationToken.ThrowIfCancellationRequested();
             var devices = await _adbService.GetConnectedDevicesAsync();
             if (devices.Count == 0)
             {
@@ -163,8 +230,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
             var selectedDevice = devices[0];
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
 
-            StatusText = $"[{SelectedProjectName}] Lettura immagine da ADB in corso su {selectedDevice}...";
+            StatusText = $"[{SelectedProjectName}] Ciclo Send {cycleNumber}: lettura immagine da ADB in corso su {selectedDevice}...";
             var pngBytes = await _adbService.CapturePngAsync(selectedDevice);
+            cancellationToken.ThrowIfCancellationRequested();
             LastCapturePreview = LoadPreview(pngBytes);
 
             using var imageStream = new MemoryStream(pngBytes);
@@ -182,9 +250,16 @@ internal sealed class MainWindowViewModel : ViewModelBase
             {
                 var tapX = bestDetection.Bounds.Left + (bestDetection.Bounds.Width / 2);
                 var tapY = bestDetection.Bounds.Top + (bestDetection.Bounds.Height / 2);
-                StatusText = $"[{SelectedProjectName}] 'cerca' riconosciuta ({bestDetection.Confidence:P0}). Tap ADB @ {tapX},{tapY}...";
+                StatusText = $"[{SelectedProjectName}] 'cerca' riconosciuta ({bestDetection.Confidence:P0}). Pausa di 3 secondi prima del tap ADB @ {tapX},{tapY}...";
+                await Task.Delay(TapPauseMs, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Tap ADB su 'cerca' @ {tapX},{tapY}...";
                 await _adbService.TapAsync(selectedDevice, tapX, tapY);
-                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'cerca' ({bestDetection.Confidence:P0}) @ {tapX},{tapY}. Attendo cambio schermata...";
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'cerca' ({bestDetection.Confidence:P0}) @ {tapX},{tapY}. Pausa di 3 secondi dopo il tap...";
+                await Task.Delay(TapPauseMs, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Attendo cambio schermata dopo il tap su 'cerca'...";
             }
             else
             {
@@ -194,36 +269,47 @@ internal sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            var arrowSearchBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes);
+            var arrowSearchBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes, cancellationToken);
             LastCapturePreview = LoadPreview(arrowSearchBytes);
-            StatusText = $"[{SelectedProjectName}] Cambio schermata rilevato. Passo successivo: ricerca di 'freccia'.";
+            StatusText = $"[{SelectedProjectName}] Cambio schermata rilevato. Passo successivo: ricerca di 'back'.";
 
             using var arrowImageStream = new MemoryStream(arrowSearchBytes);
             using var arrowBitmap = new Bitmap(arrowImageStream);
-            StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di 'freccia'...";
-            var arrowAttempt = AnalyzeDetection(arrowBitmap, modelPaths["freccia"], "freccia");
+            StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di 'back'...";
+            var arrowAttempt = AnalyzeDetection(arrowBitmap, modelPaths[SendBackClassName], SendBackClassName);
             await AppendYoloLogAsync(BuildYoloLogBlock(
-                phaseName: "freccia",
+                phaseName: "back",
                 imageName: $"adb_after_cerca_{timestamp}.png",
-                modelPath: modelPaths["freccia"],
+                modelPath: modelPaths[SendBackClassName],
                 attempt: arrowAttempt));
             var arrowDetection = arrowAttempt.BestDetection;
             if (arrowDetection is not null)
             {
                 var tapX = arrowDetection.Bounds.Left + (arrowDetection.Bounds.Width / 2);
                 var tapY = arrowDetection.Bounds.Top + (arrowDetection.Bounds.Height / 2);
-                StatusText = $"[{SelectedProjectName}] 'freccia' riconosciuta ({arrowDetection.Confidence:P0}). Tap ADB @ {tapX},{tapY}...";
+                StatusText = $"[{SelectedProjectName}] 'back' riconosciuta ({arrowDetection.Confidence:P0}). Pausa di 3 secondi prima del tap ADB @ {tapX},{tapY}...";
+                await Task.Delay(TapPauseMs, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Tap ADB su 'back' @ {tapX},{tapY}...";
                 await _adbService.TapAsync(selectedDevice, tapX, tapY);
-                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'freccia' ({arrowDetection.Confidence:P0}) @ {tapX},{tapY}. Attendo nuova immagine...";
-                var postTapImageBytes = await WaitForImageChangeAsync(selectedDevice, arrowSearchBytes);
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'back' ({arrowDetection.Confidence:P0}) @ {tapX},{tapY}. Pausa di 3 secondi dopo il tap...";
+                await Task.Delay(TapPauseMs, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                StatusText = $"[{SelectedProjectName}] Attendo nuova immagine dopo il tap su 'back'...";
+                var postTapImageBytes = await WaitForImageChangeAsync(selectedDevice, arrowSearchBytes, cancellationToken);
                 LastCapturePreview = LoadPreview(postTapImageBytes);
-                StatusText = $"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su 'freccia'.";
+                StatusText = $"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su 'back'.";
                 return;
             }
 
             var errorFileName = $"errore_{timestamp}.png";
             await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, errorFileName, "capture", arrowSearchBytes);
-            StatusText = $"[{SelectedProjectName}] 'freccia' non riconosciuta. Immagine salvata nel DB come {errorFileName}. Flusso interrotto.";
+            StatusText = $"[{SelectedProjectName}] 'back' non riconosciuta. Immagine salvata nel DB come {errorFileName}. Flusso interrotto.";
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -329,14 +415,15 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return new YoloDetectionAttempt(labelName, bestDetection, debugResult);
     }
 
-    private async Task<byte[]> WaitForImageChangeAsync(string deviceSerial, byte[] baselineBytes)
+    private async Task<byte[]> WaitForImageChangeAsync(string deviceSerial, byte[] baselineBytes, CancellationToken cancellationToken)
     {
         var baselineHash = Convert.ToHexString(SHA256.HashData(baselineBytes));
 
         for (var attempt = 1; attempt <= ImageChangeWaitAttempts; attempt++)
         {
-            await Task.Delay(ImageChangeWaitDelayMs);
+            await Task.Delay(ImageChangeWaitDelayMs, cancellationToken);
             var candidateBytes = await _adbService.CapturePngAsync(deviceSerial);
+            cancellationToken.ThrowIfCancellationRequested();
             var candidateHash = Convert.ToHexString(SHA256.HashData(candidateBytes));
             if (!string.Equals(candidateHash, baselineHash, StringComparison.Ordinal))
             {

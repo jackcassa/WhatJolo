@@ -1101,6 +1101,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public ObservableCollection<string> CropClasses { get; } = new()
     {
         "cerca",
+        "chat",
         "back",
         "freccia",
         "invio",

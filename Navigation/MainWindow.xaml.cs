@@ -30,7 +30,12 @@ public partial class MainWindow : Window
 
     private async void Send_Click(object sender, RoutedEventArgs e)
     {
-        await _viewModel.ExecuteSendStep1Async();
+        await _viewModel.StartSendLoopAsync();
+    }
+
+    private void Stop_Click(object sender, RoutedEventArgs e)
+    {
+        _viewModel.StopSendLoop();
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
