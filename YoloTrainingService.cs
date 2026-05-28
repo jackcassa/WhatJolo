@@ -533,7 +533,7 @@ internal sealed class YoloTrainingService
         var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
         var waitTask = process.WaitForExitAsync(cancellationToken);
         var allTask = Task.WhenAll(outputTask, errorTask, waitTask);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(8), cancellationToken);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
         var completed = await Task.WhenAny(allTask, timeoutTask);
         if (completed == timeoutTask)
         {
