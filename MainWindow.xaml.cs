@@ -214,7 +214,7 @@ public partial class MainWindow : System.Windows.Window
         {
             var restoredProject = await _viewModel.RestoreCurrentProjectFromDatabaseAsync();
             _viewModel.AdbCaptureTab.SetStatusMessage(
-                $"[{restoredProject.ProjectName}] Progetto ricreato dal DB: {restoredProject.RestoredImageCount} immagini ripristinate.");
+                $"[{restoredProject.ProjectName}] Progetto ricreato dal DB: {restoredProject.RestoredImageCount} immagini ripristinate, {restoredProject.RestoredModelCount} modelli ONNX ripristinati.");
             MessageBox.Show(
                 this,
                 "Progetto caricato",
@@ -490,6 +490,23 @@ public partial class MainWindow : System.Windows.Window
         await _viewModel.AdbCaptureTab.DeleteSelectedCropAsync(_viewModel.SelectedCropClass);
     }
 
+    private async void SavedCropsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_viewModel?.AdbCaptureTab.SelectedSavedCrop == null)
+        {
+            return;
+        }
+
+        var loaded = await _viewModel.AdbCaptureTab.LoadSourceImageForCropAsync(_viewModel.AdbCaptureTab.SelectedSavedCrop);
+        if (!loaded)
+        {
+            return;
+        }
+
+        EnsureAdbPreviewWindow();
+        _adbPreviewWindow?.ClearSelection();
+    }
+
     private async void VariationCropsList_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Delete)
@@ -499,6 +516,23 @@ public partial class MainWindow : System.Windows.Window
 
         e.Handled = true;
         await _viewModel.AdbCaptureTab.DeleteSelectedVariationCropAsync(_viewModel.SelectedCropClass);
+    }
+
+    private async void VariationCropsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_viewModel?.AdbCaptureTab.SelectedVariationCrop == null)
+        {
+            return;
+        }
+
+        var loaded = await _viewModel.AdbCaptureTab.LoadSourceImageForCropAsync(_viewModel.AdbCaptureTab.SelectedVariationCrop);
+        if (!loaded)
+        {
+            return;
+        }
+
+        EnsureAdbPreviewWindow();
+        _adbPreviewWindow?.ClearSelection();
     }
 
     private async void UltraTestImages_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1403,7 +1437,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             case "ProjectCropLink":
                 command.CommandText =
                     """
-                    SELECT pcl.Id, pcl.ProjectName, pcl.LabelName, pcl.IsVariation, pcl.CropAssetId, ca.CropImagePath, pcl.CreatedAtUtc, pcl.UpdatedAtUtc
+                    SELECT pcl.Id, pcl.ProjectName, pcl.LabelName, pcl.IsVariation, pcl.CropAssetId, ca.CropImageKey, pcl.CreatedAtUtc, pcl.UpdatedAtUtc
                     FROM ProjectCropLink pcl
                     INNER JOIN CropAsset ca ON ca.Id = pcl.CropAssetId
                     WHERE pcl.ProjectName = @ProjectName
@@ -1421,8 +1455,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                         pcl.LabelName,
                         pcl.IsVariation,
                         ca.Id,
-                        ca.SourceImagePath,
-                        ca.CropImagePath,
+                        ca.SourceImageKey,
+                        ca.CropImageKey,
                         ca.CropHash,
                         ca.X,
                         ca.Y,
@@ -1454,7 +1488,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             case "ProjectInfo":
                 command.CommandText =
                     """
-                    SELECT Id, ProjectName, ProjectRootPath, MachineName, CreatedAtUtc, UpdatedAtUtc
+                    SELECT Id, ProjectName, MachineName, CurrentCropClass, CreatedAtUtc, UpdatedAtUtc
                     FROM ProjectInfo
                     WHERE ProjectName = @ProjectName
                     ORDER BY UpdatedAtUtc DESC;
@@ -1467,13 +1501,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             case "projectimageblob":
                 command.CommandText = SharedDatabase.IsPostgresConfigured()
                     ? """
-                      SELECT Id, ProjectName, ImagePath, ImageKind, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
+                      SELECT Id, ProjectName, ImageKey, ImageKind, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
                       FROM ProjectImageBlob
                       WHERE ProjectName = @ProjectName
                       ORDER BY UpdatedAtUtc DESC, Id DESC;
                       """
                     : """
-                      SELECT Id, ProjectName, ImagePath, ImageKind, ContentHash, ByteLength, length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
+                      SELECT Id, ProjectName, ImageKey, ImageKind, ContentHash, ByteLength, length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
                       FROM ProjectImageBlob
                       WHERE ProjectName = @ProjectName
                       ORDER BY UpdatedAtUtc DESC, Id DESC;
@@ -1567,15 +1601,15 @@ public sealed class MainWindowViewModel : ViewModelBase
                 {
                     var projectName = GetRowValue(rowView, "ProjectName");
                     var labelName = GetRowValue(rowView, "LabelName");
-                    var cropImagePath = ResolveDbPath(GetRowValue(rowView, "CropImagePath"));
+                    var cropImageKey = GetRowValue(rowView, "CropImageKey");
 
-                    if (string.IsNullOrWhiteSpace(projectName) || string.IsNullOrWhiteSpace(labelName) || string.IsNullOrWhiteSpace(cropImagePath))
+                    if (string.IsNullOrWhiteSpace(projectName) || string.IsNullOrWhiteSpace(labelName) || string.IsNullOrWhiteSpace(cropImageKey))
                     {
                         continue;
                     }
 
                     var cropDbService = new AnnotationCropDbService();
-                    var deleted = await cropDbService.DeleteCropAsync(projectName, labelName, cropImagePath);
+                    var deleted = await cropDbService.DeleteCropAsync(projectName, labelName, cropImageKey);
                     if (deleted)
                     {
                         deletedCount++;
@@ -1683,17 +1717,6 @@ public sealed class MainWindowViewModel : ViewModelBase
             : string.Empty;
     }
 
-    private static string ResolveDbPath(string storedPath)
-    {
-        if (string.IsNullOrWhiteSpace(storedPath) || Path.IsPathRooted(storedPath))
-        {
-            return storedPath;
-        }
-
-        var root = SharedDatabase.GetProjectDirectoryPath();
-        return Path.GetFullPath(Path.Combine(root, storedPath.Replace('/', Path.DirectorySeparatorChar)));
-    }
-
     public void SaveDatabaseInstanceSettings()
     {
         SharedDatabase.SavePostgresSettings(new PostgresConnectionSettings
@@ -1755,7 +1778,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             await Task.Yield();
             SharedDatabase.ActivateConfiguredPostgres();
 
-            DbInstanceStatus = "Inizializzazione schema e verifica connessione in corso...";
+            DbInstanceStatus = "Verifica connessione PostgreSQL in corso...";
             await Task.Yield();
             await ReloadDatabaseConnectionAsync();
 
@@ -1788,7 +1811,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         IProgress<string> progress = new Progress<string>(message => DbInstanceStatus = message);
         var tableNames = await Task.Run(() =>
         {
-            progress.Report("Reset inizializzazione backend PostgreSQL...");
+            progress.Report("Reset stato connessione PostgreSQL...");
             SharedDatabase.ResetInitialization();
             SharedDatabase.EnsureDatabaseReady(message => progress.Report(message));
 

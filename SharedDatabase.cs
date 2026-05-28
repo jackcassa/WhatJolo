@@ -7,8 +7,6 @@ namespace WhatJolo;
 
 public static class SharedDatabase
 {
-    private static readonly object InitLock = new();
-    private static bool _initialized;
     private static bool _postgresActivated;
     private static PostgresConnectionSettings? _cachedSettings;
 
@@ -62,7 +60,6 @@ public static class SharedDatabase
             throw new InvalidOperationException("Database PostgreSQL non connesso. Premi Connetti nella tab Istanza DB.");
         }
 
-        EnsureDatabaseReady();
         return new NpgsqlConnection(GetPostgresConnectionString());
     }
 
@@ -143,10 +140,7 @@ public static class SharedDatabase
 
     public static void ResetInitialization()
     {
-        lock (InitLock)
-        {
-            _initialized = false;
-        }
+        // Il bootstrap schema e' esterno al progetto.
     }
 
     public static string GetConnectionDisplayString()
@@ -168,24 +162,18 @@ public static class SharedDatabase
 
     public static void EnsureDatabaseReady(Action<string>? progress = null)
     {
-        if (!IsPostgresConfigured() || _initialized)
+        if (!IsPostgresConfigured())
         {
             return;
         }
 
-        lock (InitLock)
-        {
-            if (!IsPostgresConfigured() || _initialized)
-            {
-                return;
-            }
-
-            progress?.Invoke("Creazione/verifica schema PostgreSQL...");
-            var migrator = new PostgresDatabaseMigrator(GetPostgresConnectionString());
-            migrator.EnsureReady();
-            _initialized = true;
-            progress?.Invoke("Schema PostgreSQL pronto.");
-        }
+        progress?.Invoke("Verifica connessione PostgreSQL...");
+        using var connection = new NpgsqlConnection(GetPostgresConnectionString());
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1;";
+        command.ExecuteScalar();
+        progress?.Invoke("Connessione PostgreSQL verificata.");
     }
 
     private static string GetPostgresConnectionString()

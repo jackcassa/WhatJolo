@@ -317,6 +317,7 @@
                                      SelectionMode="Extended"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     SelectionChanged="SavedCropsList_SelectionChanged"
                                      KeyDown="SavedCropsList_KeyDown">
                                 <ListBox.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -360,6 +361,7 @@
                                      SelectedItem="{Binding AdbCaptureTab.SelectedVariationCrop}"
                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     SelectionChanged="VariationCropsList_SelectionChanged"
                                      KeyDown="VariationCropsList_KeyDown">
                                 <ListBox.ItemsPanel>
                                     <ItemsPanelTemplate>

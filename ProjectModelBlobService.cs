@@ -19,8 +19,6 @@ public sealed class ProjectModelBlobService
             throw new FileNotFoundException($"best.onnx non trovato per il progetto {normalizedProjectName}, classe {normalizedClassName}.");
         }
 
-        EnsureTable();
-
         var originalBytes = await File.ReadAllBytesAsync(onnxPath);
         var compressedBytes = Compress(originalBytes);
         var contentHash = Convert.ToHexString(SHA256.HashData(originalBytes));
@@ -91,8 +89,6 @@ public sealed class ProjectModelBlobService
     {
         var normalizedProjectName = _workspaceService.EnsureProject(projectName);
         var normalizedClassName = NormalizeClassName(className);
-        EnsureTable();
-
         if (!SharedDatabase.IsDatabaseConnected())
         {
             throw new InvalidOperationException("Database non connesso. Apri la tab Istanza DB e premi Connetti.");
@@ -162,6 +158,97 @@ public sealed class ProjectModelBlobService
             contentHash);
     }
 
+    public async Task<IReadOnlyList<ProjectModelBlobRestoreResult>> RestoreAllBestOnnxToProjectAsync(string projectName)
+    {
+        var normalizedProjectName = _workspaceService.EnsureProject(projectName);
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            throw new InvalidOperationException("Database non connesso. Apri la tab Istanza DB e premi Connetti.");
+        }
+
+        var latestModels = new List<(string ClassName, string ModelFileName, string RunName, string ContentHash, int ByteLength, byte[] CompressedBytes)>();
+
+        await using var connection = SharedDatabase.CreateConnection();
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT DISTINCT ON (ClassName)
+                   ClassName,
+                   ModelFileName,
+                   RunName,
+                   ContentHash,
+                   ByteLength,
+                   CompressedBytes
+            FROM ProjectModelBlob
+            WHERE ProjectName = @ProjectName
+              AND ModelKind = @ModelKind
+            ORDER BY ClassName, UpdatedAtUtc DESC, Id DESC;
+            """;
+        AddParameter(command, "@ProjectName", normalizedProjectName);
+        AddParameter(command, "@ModelKind", "best.onnx");
+
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            latestModels.Add((
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetInt32(4),
+                (byte[])reader.GetValue(5)));
+        }
+
+        var restoredModels = new List<ProjectModelBlobRestoreResult>();
+        foreach (var model in latestModels)
+        {
+            var normalizedClassName = NormalizeClassName(model.ClassName);
+            var originalBytes = Decompress(model.CompressedBytes);
+            if (originalBytes.Length != model.ByteLength)
+            {
+                throw new InvalidDataException($"La dimensione del modello ONNX salvato nel DB non corrisponde ai metadati per la classe {normalizedClassName}.");
+            }
+
+            var restoredHash = Convert.ToHexString(SHA256.HashData(originalBytes));
+            if (!string.Equals(restoredHash, model.ContentHash, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException($"Il modello ONNX salvato nel DB non supera il controllo hash per la classe {normalizedClassName}.");
+            }
+
+            var runName = string.IsNullOrWhiteSpace(model.RunName)
+                ? $"{SanitizePathSegment(normalizedProjectName)}_{SanitizePathSegment(normalizedClassName)}"
+                : SanitizePathSegment(model.RunName);
+            var modelFileName = string.IsNullOrWhiteSpace(model.ModelFileName) ? "best.onnx" : model.ModelFileName;
+            var outputPath = Path.Combine(
+                _workspaceService.GetYoloRunsPath(normalizedProjectName, normalizedClassName),
+                runName,
+                "weights",
+                modelFileName);
+
+            var outputDirectory = Path.GetDirectoryName(outputPath);
+            if (!string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                Directory.CreateDirectory(outputDirectory);
+            }
+
+            await File.WriteAllBytesAsync(outputPath, originalBytes);
+            WriteProjectLabelsBesideModel(normalizedProjectName, normalizedClassName, outputPath);
+
+            restoredModels.Add(new ProjectModelBlobRestoreResult(
+                normalizedProjectName,
+                normalizedClassName,
+                outputPath,
+                modelFileName,
+                runName,
+                model.ByteLength,
+                model.CompressedBytes.Length,
+                model.ContentHash));
+        }
+
+        return restoredModels;
+    }
+
     private static byte[] Compress(byte[] inputBytes)
     {
         using var outputStream = new MemoryStream();
@@ -223,48 +310,6 @@ public sealed class ProjectModelBlobService
         command.Parameters.Add(parameter);
     }
 
-    private static void EnsureTable()
-    {
-        if (!SharedDatabase.IsDatabaseConnected())
-        {
-            return;
-        }
-
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            CREATE TABLE IF NOT EXISTS ProjectModelBlob
-            (
-                Id BIGSERIAL PRIMARY KEY,
-                ProjectName TEXT NOT NULL,
-                ClassName TEXT NOT NULL DEFAULT '',
-                ModelFileName TEXT NOT NULL,
-                ModelKind TEXT NOT NULL,
-                RunName TEXT NOT NULL,
-                ContentHash TEXT NOT NULL,
-                ByteLength INTEGER NOT NULL,
-                CompressedBytes BYTEA NOT NULL,
-                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(ProjectName, ModelKind)
-            );
-
-            ALTER TABLE ProjectModelBlob
-                ADD COLUMN IF NOT EXISTS ClassName TEXT NOT NULL DEFAULT '';
-
-            ALTER TABLE ProjectModelBlob
-                DROP CONSTRAINT IF EXISTS projectmodelblob_projectname_modelkind_key;
-
-            CREATE UNIQUE INDEX IF NOT EXISTS IX_ProjectModelBlob_ProjectName_ClassName_ModelKind
-                ON ProjectModelBlob(ProjectName, ClassName, ModelKind);
-
-            CREATE INDEX IF NOT EXISTS IX_ProjectModelBlob_ProjectName
-                ON ProjectModelBlob(ProjectName, ClassName, UpdatedAtUtc DESC);
-            """;
-        command.ExecuteNonQuery();
-    }
 }
 
 public sealed record ProjectModelBlobSaveResult(

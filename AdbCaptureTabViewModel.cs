@@ -277,6 +277,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
             foreach (var captureFile in captureFiles)
             {
                 CapturedImages.Add(new CapturedImageItem(
+                    ProjectAssetKey.BuildSourceImageKey(_workspaceService, CurrentProjectName, captureFile),
                     captureFile,
                     Path.GetFileName(captureFile),
                     CreateBitmapImage(await File.ReadAllBytesAsync(captureFile))));
@@ -306,6 +307,35 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         LastCapturePath = selectedItem.FilePath;
         LatestScreenshotPreview = CreateBitmapImage(await File.ReadAllBytesAsync(selectedItem.FilePath));
         AdbStatusText = $"[{CurrentProjectName}] Capture caricata per la selezione: {selectedItem.FileName}";
+        return true;
+    }
+
+    public async Task<bool> LoadSourceImageForCropAsync(SavedCropItem? cropItem)
+    {
+        if (cropItem == null)
+        {
+            AdbStatusText = $"[{CurrentProjectName}] Nessuna crop selezionata.";
+            return false;
+        }
+
+        var sourceRecord = await _annotationCropDbService.GetProjectCropByImageKeyAsync(CurrentProjectName, cropItem.ImageKey);
+        if (sourceRecord == null)
+        {
+            AdbStatusText = $"[{CurrentProjectName}] Record DB della crop selezionata non trovato.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(sourceRecord.SourceImagePath) || !File.Exists(sourceRecord.SourceImagePath))
+        {
+            AdbStatusText = $"[{CurrentProjectName}] Immagine sorgente della crop non trovata.";
+            return false;
+        }
+
+        LastCapturePath = sourceRecord.SourceImagePath;
+        LatestScreenshotPreview = CreateBitmapImage(await File.ReadAllBytesAsync(sourceRecord.SourceImagePath));
+        SelectedCapturedImage = CapturedImages.FirstOrDefault(item =>
+            string.Equals(item.FilePath, sourceRecord.SourceImagePath, StringComparison.OrdinalIgnoreCase));
+        AdbStatusText = $"[{CurrentProjectName}] Immagine sorgente caricata per la crop: {cropItem.FileName}";
         return true;
     }
 
@@ -376,6 +406,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         await AlignCurrentProjectAsync("crop");
 
         var savedItem = new SavedCropItem(
+            ProjectAssetKey.BuildCropImageKey(_workspaceService, CurrentProjectName, safeClass, isVariation: false, outputPath),
             outputPath,
             Path.GetFileName(outputPath),
             safeClass,
@@ -399,14 +430,14 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         }
 
         var safeClass = string.IsNullOrWhiteSpace(cropClass) ? "crop" : cropClass.Trim().ToLowerInvariant();
-        await _annotationCropDbService.DeleteCropAsync(CurrentProjectName, safeClass, item.FilePath);
+        await _annotationCropDbService.DeleteCropAsync(CurrentProjectName, safeClass, item.ImageKey);
 
         if (File.Exists(item.FilePath))
         {
             File.Delete(item.FilePath);
         }
 
-        await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath);
+        await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath, "crop");
         await AlignCurrentProjectAsync("delete-crop");
 
         await LoadSavedCropsAsync(safeClass);
@@ -424,14 +455,14 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         }
 
         var safeClass = string.IsNullOrWhiteSpace(cropClass) ? "crop" : cropClass.Trim().ToLowerInvariant();
-        await _annotationCropDbService.DeleteCropAsync(CurrentProjectName, safeClass, item.FilePath);
+        await _annotationCropDbService.DeleteCropAsync(CurrentProjectName, safeClass, item.ImageKey);
 
         if (File.Exists(item.FilePath))
         {
             File.Delete(item.FilePath);
         }
 
-        await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath);
+        await _projectImageBlobService.DeleteImageAsync(CurrentProjectName, item.FilePath, "variation-crop");
         await AlignCurrentProjectAsync("delete-variation");
 
         await LoadSavedCropsAsync(safeClass);
@@ -448,7 +479,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
             return 0;
         }
 
-        var sourceRecord = await _annotationCropDbService.GetProjectCropByImagePathAsync(CurrentProjectName, selectedItem.FilePath);
+        var sourceRecord = await _annotationCropDbService.GetProjectCropByImageKeyAsync(CurrentProjectName, selectedItem.ImageKey);
         if (sourceRecord == null)
         {
             AdbStatusText = $"[{CurrentProjectName}] Record DB della crop selezionata non trovato.";
@@ -481,7 +512,13 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
         var totalGenerated = 0;
         foreach (var cropPath in safePaths)
         {
-            var sourceRecord = await _annotationCropDbService.GetProjectCropByImagePathAsync(CurrentProjectName, cropPath);
+            var cropKey = ProjectAssetKey.BuildCropImageKey(
+                _workspaceService,
+                CurrentProjectName,
+                cropClass,
+                cropPath.Contains("_var_", StringComparison.OrdinalIgnoreCase),
+                cropPath);
+            var sourceRecord = await _annotationCropDbService.GetProjectCropByImageKeyAsync(CurrentProjectName, cropKey);
             if (sourceRecord == null)
             {
                 continue;
@@ -554,6 +591,7 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     private static SavedCropItem CreateSavedCropItem(ProjectCropRecord record)
     {
         return new SavedCropItem(
+            record.CropImageKey,
             record.CropImagePath,
             Path.GetFileName(record.CropImagePath),
             record.LabelName,
@@ -584,5 +622,5 @@ public sealed class AdbCaptureTabViewModel : ViewModelBase
     }
 }
 
-public sealed record SavedCropItem(string FilePath, string FileName, string LabelName, BitmapImage PreviewImage, bool IsVariation);
-public sealed record CapturedImageItem(string FilePath, string FileName, BitmapImage PreviewImage);
+public sealed record SavedCropItem(string ImageKey, string FilePath, string FileName, string LabelName, BitmapImage PreviewImage, bool IsVariation);
+public sealed record CapturedImageItem(string ImageKey, string FilePath, string FileName, BitmapImage PreviewImage);

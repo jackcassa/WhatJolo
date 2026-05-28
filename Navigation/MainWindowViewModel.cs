@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Drawing;
 using System.IO;
+using System.Security.Cryptography;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using WhatJolo;
@@ -10,7 +11,10 @@ namespace Navigation;
 internal sealed class MainWindowViewModel : ViewModelBase
 {
     private const string SendModelClassName = "cerca";
+    private static readonly string[] RequiredSendModelClasses = ["cerca", "freccia"];
     private const float SendDetectionThreshold = 0.05f;
+    private const int ImageChangeWaitAttempts = 12;
+    private const int ImageChangeWaitDelayMs = 500;
 
     private readonly AdbService _adbService;
     private readonly ProjectModelBlobService _projectModelBlobService;
@@ -113,13 +117,22 @@ internal sealed class MainWindowViewModel : ViewModelBase
     {
         // Step 1 del workflow Send:
         // 1. verifica progetto selezionato e disponibilità di ADB
-        // 2. controlla il best.onnx del progetto corrente per la classe "cerca"
-        // 3. se il best.onnx locale manca, lo ripristina dal DB scompattandolo in temp
+        // 2. ricostruisce la struttura locale per l'inferenza del progetto selezionato
+        //    e delle classi presenti nel progetto, ciascuna nella propria directory
+        // 3. usa quei path locali per i modelli best.onnx di "cerca" e "freccia"
         // 4. avvia il server ADB
         // 5. legge i device collegati
         // 6. acquisisce uno screenshot PNG dal primo device disponibile
-        // 7. se trova "cerca" esegue il tap ADB sul bounding box migliore
-        // 8. se non trova "cerca" salva l'immagine come errore_<timestamp>.png
+        // 7. esegue YOLO alla ricerca della classe "cerca"
+        // 8. se trova "cerca" fa il tap e passa al passo successivo
+        // 9. se non trova "cerca" salva l'immagine come priva_<timestamp>.png e ferma il flusso
+        // 10. aspetta che l'immagine cambi
+        // 11. aggiorna la preview con la nuova immagine
+        // 12. esegue YOLO alla ricerca della classe "freccia"
+        // 13. se trova "freccia" esegue il tap ADB sul bounding box migliore
+        // 14. se non trova "freccia" salva l'immagine come errore_<timestamp>.png e ferma il flusso
+        // 15. dopo il tap su "freccia" aspetta che arrivi una nuova immagine
+        // 16. aggiorna ancora la preview con la nuova immagine
         if (!_adbService.Exists())
         {
             StatusText = "ADB non trovato.";
@@ -134,7 +147,8 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
         try
         {
-            var modelPath = await EnsureSendModelAsync();
+            await PrepareInferenceStructureAsync();
+            var modelPaths = await EnsureSendModelsAsync();
             StatusText = $"[{SelectedProjectName}] Avvio ADB...";
             await _adbService.StartServerAsync();
             var devices = await _adbService.GetConnectedDevicesAsync();
@@ -155,12 +169,14 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
             using var imageStream = new MemoryStream(pngBytes);
             using var bitmap = new Bitmap(imageStream);
-            using var detector = new YoloIconDetector(modelPath);
-            var bestDetection = detector
-                .DetectAll(bitmap, SendDetectionThreshold)
-                .Where(d => string.Equals(d.Label, SendModelClassName, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(d => d.Confidence)
-                .FirstOrDefault();
+            StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di '{SendModelClassName}'...";
+            var searchDetection = AnalyzeDetection(bitmap, modelPaths[SendModelClassName], SendModelClassName);
+            await AppendYoloLogAsync(BuildYoloLogBlock(
+                phaseName: "cerca",
+                imageName: $"adb_capture_{timestamp}.png",
+                modelPath: modelPaths[SendModelClassName],
+                attempt: searchDetection));
+            var bestDetection = searchDetection.BestDetection;
 
             if (bestDetection is not null)
             {
@@ -168,13 +184,46 @@ internal sealed class MainWindowViewModel : ViewModelBase
                 var tapY = bestDetection.Bounds.Top + (bestDetection.Bounds.Height / 2);
                 StatusText = $"[{SelectedProjectName}] 'cerca' riconosciuta ({bestDetection.Confidence:P0}). Tap ADB @ {tapX},{tapY}...";
                 await _adbService.TapAsync(selectedDevice, tapX, tapY);
-                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'cerca' ({bestDetection.Confidence:P0}) @ {tapX},{tapY}.";
+                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'cerca' ({bestDetection.Confidence:P0}) @ {tapX},{tapY}. Attendo cambio schermata...";
+            }
+            else
+            {
+                var privaPath = Path.Combine(capturesPath, $"priva_{timestamp}.png");
+                await File.WriteAllBytesAsync(privaPath, pngBytes);
+                StatusText = $"[{SelectedProjectName}] 'cerca' non trovata. Immagine salvata in {privaPath}. Flusso interrotto.";
+                return;
+            }
+
+            var arrowSearchBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes);
+            LastCapturePreview = LoadPreview(arrowSearchBytes);
+            StatusText = $"[{SelectedProjectName}] Cambio schermata rilevato. Passo successivo: ricerca di 'freccia'.";
+
+            using var arrowImageStream = new MemoryStream(arrowSearchBytes);
+            using var arrowBitmap = new Bitmap(arrowImageStream);
+            StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di 'freccia'...";
+            var arrowAttempt = AnalyzeDetection(arrowBitmap, modelPaths["freccia"], "freccia");
+            await AppendYoloLogAsync(BuildYoloLogBlock(
+                phaseName: "freccia",
+                imageName: $"adb_after_cerca_{timestamp}.png",
+                modelPath: modelPaths["freccia"],
+                attempt: arrowAttempt));
+            var arrowDetection = arrowAttempt.BestDetection;
+            if (arrowDetection is not null)
+            {
+                var tapX = arrowDetection.Bounds.Left + (arrowDetection.Bounds.Width / 2);
+                var tapY = arrowDetection.Bounds.Top + (arrowDetection.Bounds.Height / 2);
+                StatusText = $"[{SelectedProjectName}] 'freccia' riconosciuta ({arrowDetection.Confidence:P0}). Tap ADB @ {tapX},{tapY}...";
+                await _adbService.TapAsync(selectedDevice, tapX, tapY);
+                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'freccia' ({arrowDetection.Confidence:P0}) @ {tapX},{tapY}. Attendo nuova immagine...";
+                var postTapImageBytes = await WaitForImageChangeAsync(selectedDevice, arrowSearchBytes);
+                LastCapturePreview = LoadPreview(postTapImageBytes);
+                StatusText = $"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su 'freccia'.";
                 return;
             }
 
             var errorPath = Path.Combine(capturesPath, $"errore_{timestamp}.png");
-            await File.WriteAllBytesAsync(errorPath, pngBytes);
-            StatusText = $"[{SelectedProjectName}] 'cerca' non riconosciuta. Immagine salvata in {errorPath}";
+            await File.WriteAllBytesAsync(errorPath, arrowSearchBytes);
+            StatusText = $"[{SelectedProjectName}] 'freccia' non riconosciuta. Immagine salvata in {errorPath}. Flusso interrotto.";
         }
         catch (Exception ex)
         {
@@ -237,18 +286,106 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return bitmap;
     }
 
-    private async Task<string> EnsureSendModelAsync()
+    private async Task<Dictionary<string, string>> EnsureSendModelsAsync()
     {
-        var localModelPath = _workspaceService.FindLatestYoloOnnxPath(SelectedProjectName);
-        if (!string.IsNullOrWhiteSpace(localModelPath) && File.Exists(localModelPath))
+        var modelPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var className in RequiredSendModelClasses)
         {
-            StatusText = $"[{SelectedProjectName}] best.onnx locale trovato per classe {SendModelClassName}: {localModelPath}";
-            return localModelPath;
+            var localModelPath = _workspaceService.FindLatestYoloOnnxPath(SelectedProjectName, className);
+            if (!string.IsNullOrWhiteSpace(localModelPath) && File.Exists(localModelPath))
+            {
+                StatusText = $"[{SelectedProjectName}] best.onnx locale trovato per classe {className}: {localModelPath}";
+                modelPaths[className] = localModelPath;
+                continue;
+            }
+
+            throw new FileNotFoundException($"best.onnx locale non trovato per la classe {className} dopo la ricostruzione della struttura di inferenza.");
         }
 
-        StatusText = $"[{SelectedProjectName}] best.onnx locale mancante. Ripristino dal DB per classe {SendModelClassName}...";
-        var restoredModel = await _projectModelBlobService.RestoreLatestBestOnnxToTempAsync(SelectedProjectName, SendModelClassName);
-        StatusText = $"[{SelectedProjectName}] best.onnx scompattato dal DB in {restoredModel.ModelPath}";
-        return restoredModel.ModelPath;
+        if (!modelPaths.TryGetValue(SendModelClassName, out var detectionModelPath) || string.IsNullOrWhiteSpace(detectionModelPath))
+        {
+            throw new FileNotFoundException($"Impossibile trovare un best.onnx utilizzabile per la classe {SendModelClassName}.");
+        }
+
+        return modelPaths;
+    }
+
+    private async Task PrepareInferenceStructureAsync()
+    {
+        StatusText = $"[{SelectedProjectName}] Ricostruzione struttura locale per l'inferenza in corso...";
+        var restoredModels = await _projectModelBlobService.RestoreAllBestOnnxToProjectAsync(SelectedProjectName);
+        StatusText = $"[{SelectedProjectName}] Struttura inferenza pronta: {restoredModels.Count} modelli ONNX ripristinati nelle directory di classe.";
+    }
+
+    private YoloDetectionAttempt AnalyzeDetection(Bitmap bitmap, string modelPath, string labelName)
+    {
+        using var detector = new YoloIconDetector(modelPath);
+        var debugResult = detector.DetectDebug(bitmap, SendDetectionThreshold);
+        var bestDetection = debugResult.Detections
+            .Where(d => string.Equals(d.Label, labelName, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(d => d.Confidence)
+            .FirstOrDefault();
+        return new YoloDetectionAttempt(labelName, bestDetection, debugResult);
+    }
+
+    private async Task<byte[]> WaitForImageChangeAsync(string deviceSerial, byte[] baselineBytes)
+    {
+        var baselineHash = Convert.ToHexString(SHA256.HashData(baselineBytes));
+
+        for (var attempt = 1; attempt <= ImageChangeWaitAttempts; attempt++)
+        {
+            await Task.Delay(ImageChangeWaitDelayMs);
+            var candidateBytes = await _adbService.CapturePngAsync(deviceSerial);
+            var candidateHash = Convert.ToHexString(SHA256.HashData(candidateBytes));
+            if (!string.Equals(candidateHash, baselineHash, StringComparison.Ordinal))
+            {
+                return candidateBytes;
+            }
+        }
+
+        throw new TimeoutException("L'immagine ADB non e' cambiata entro il tempo atteso.");
+    }
+
+    private async Task AppendYoloLogAsync(string logBlock)
+    {
+        var logPath = Path.Combine(_workspaceService.GetProjectPath(SelectedProjectName), "navigation_yolo.log");
+        var logDirectory = Path.GetDirectoryName(logPath);
+        if (!string.IsNullOrWhiteSpace(logDirectory))
+        {
+            Directory.CreateDirectory(logDirectory);
+        }
+
+        await File.AppendAllTextAsync(logPath, logBlock + Environment.NewLine + Environment.NewLine);
+    }
+
+    private string BuildYoloLogBlock(string phaseName, string imageName, string modelPath, YoloDetectionAttempt attempt)
+    {
+        var labels = attempt.DebugResult.Labels.Count > 0
+            ? string.Join(", ", attempt.DebugResult.Labels)
+            : "(nessuna labels.txt trovata)";
+        var bestDetectionText = attempt.BestDetection is null
+            ? "nessuna"
+            : $"{attempt.BestDetection.Label} conf={attempt.BestDetection.Confidence:P2} bbox={attempt.BestDetection.Bounds.Left},{attempt.BestDetection.Bounds.Top},{attempt.BestDetection.Bounds.Width},{attempt.BestDetection.Bounds.Height}";
+
+        return
+            $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] Workflow Send YOLO" + Environment.NewLine +
+            $"Progetto: {SelectedProjectName}" + Environment.NewLine +
+            $"Fase: {phaseName}" + Environment.NewLine +
+            $"Immagine: {imageName}" + Environment.NewLine +
+            $"Modello: {modelPath}" + Environment.NewLine +
+            $"Soglia confidence: {SendDetectionThreshold:0.00}" + Environment.NewLine +
+            $"Input modello: {attempt.DebugResult.InputWidth}x{attempt.DebugResult.InputHeight}" + Environment.NewLine +
+            $"Output tensor: {string.Join('x', attempt.DebugResult.OutputDimensions)}" + Environment.NewLine +
+            $"Classi modello: {labels}" + Environment.NewLine +
+            $"Detection grezze: {attempt.DebugResult.RawDetectionCount}" + Environment.NewLine +
+            $"Sopra soglia: {attempt.DebugResult.AboveThresholdCount}" + Environment.NewLine +
+            $"Dopo NMS: {attempt.DebugResult.FinalDetectionCount}" + Environment.NewLine +
+            $"Migliore match '{attempt.LabelName}': {bestDetectionText}";
     }
 }
+
+internal sealed record YoloDetectionAttempt(
+    string LabelName,
+    YoloDetection? BestDetection,
+    YoloDetectionDebugResult DebugResult);

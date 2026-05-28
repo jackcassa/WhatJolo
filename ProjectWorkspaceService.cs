@@ -21,9 +21,6 @@ public sealed class ProjectWorkspaceService
 
         if (SharedDatabase.IsDatabaseConnected())
         {
-            SharedDatabase.EnsureDatabaseReady();
-            EnsureProjectInfoTable();
-
             using var connection = SharedDatabase.CreateConnection();
             connection.Open();
             using var command = connection.CreateCommand();
@@ -68,10 +65,7 @@ public sealed class ProjectWorkspaceService
         Directory.CreateDirectory(Path.Combine(projectPath, "SavedCrops"));
         if (SharedDatabase.IsDatabaseConnected())
         {
-            SharedDatabase.EnsureDatabaseReady();
-            EnsureProjectActiveClassTable();
-            EnsureProjectInfoTable();
-            UpsertProjectInfo(normalizedName, projectPath);
+            UpsertProjectInfo(normalizedName);
         }
         return normalizedName;
     }
@@ -196,8 +190,20 @@ public sealed class ProjectWorkspaceService
             return null;
         }
 
-        return Directory
+        var preferredMatches = Directory
             .EnumerateDirectories(runsPath, $"{safeProjectName}_{safeClassName}*", SearchOption.TopDirectoryOnly)
+            .ToList();
+
+        if (preferredMatches.Count == 0)
+        {
+            // Backward compatibility for migrated class runs that still use the old
+            // project-only naming, for example "runs\\primo\\weights\\best.onnx".
+            preferredMatches = Directory
+                .EnumerateDirectories(runsPath, safeProjectName, SearchOption.TopDirectoryOnly)
+                .ToList();
+        }
+
+        return preferredMatches
             .Select(path => new
             {
                 Path = path,
@@ -318,8 +324,6 @@ public sealed class ProjectWorkspaceService
             return null;
         }
 
-        EnsureProjectInfoTable();
-
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var command = connection.CreateCommand();
@@ -352,8 +356,6 @@ public sealed class ProjectWorkspaceService
 
         var normalizedProjectName = EnsureProject(projectName);
         var normalizedClassName = NormalizeClassName(className);
-
-        EnsureProjectInfoTable();
 
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
@@ -469,58 +471,7 @@ public sealed class ProjectWorkspaceService
         return Directory.GetLastWriteTimeUtc(runPath);
     }
 
-    private void EnsureProjectActiveClassTable()
-    {
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            CREATE TABLE IF NOT EXISTS ProjectActiveClass
-            (
-                Id BIGSERIAL PRIMARY KEY,
-                ProjectName TEXT NOT NULL,
-                ClassName TEXT NOT NULL,
-                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(ProjectName, ClassName)
-            );
-
-            CREATE INDEX IF NOT EXISTS IX_ProjectActiveClass_ProjectName
-                ON ProjectActiveClass(ProjectName, ClassName);
-            """;
-        command.ExecuteNonQuery();
-    }
-
-    private void EnsureProjectInfoTable()
-    {
-        using var connection = SharedDatabase.CreateConnection();
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            CREATE TABLE IF NOT EXISTS ProjectInfo
-            (
-                Id BIGSERIAL PRIMARY KEY,
-                ProjectName TEXT NOT NULL,
-                ProjectRootPath TEXT NOT NULL,
-                MachineName TEXT NOT NULL,
-                CurrentCropClass TEXT NULL,
-                CreatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UpdatedAtUtc TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(ProjectName)
-            );
-
-            ALTER TABLE ProjectInfo
-                ADD COLUMN IF NOT EXISTS CurrentCropClass TEXT NULL;
-
-            CREATE INDEX IF NOT EXISTS IX_ProjectInfo_ProjectName
-                ON ProjectInfo(ProjectName);
-            """;
-        command.ExecuteNonQuery();
-    }
-
-    private void UpsertProjectInfo(string projectName, string projectRootPath)
+    private void UpsertProjectInfo(string projectName)
     {
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
@@ -530,7 +481,6 @@ public sealed class ProjectWorkspaceService
             INSERT INTO ProjectInfo
             (
                 ProjectName,
-                ProjectRootPath,
                 MachineName,
                 CurrentCropClass,
                 CreatedAtUtc,
@@ -539,19 +489,16 @@ public sealed class ProjectWorkspaceService
             VALUES
             (
                 @ProjectName,
-                @ProjectRootPath,
                 @MachineName,
                 @CurrentCropClass,
                 CURRENT_TIMESTAMP,
                 CURRENT_TIMESTAMP
             )
             ON CONFLICT(ProjectName) DO UPDATE SET
-                ProjectRootPath = excluded.ProjectRootPath,
                 MachineName = excluded.MachineName,
                 UpdatedAtUtc = CURRENT_TIMESTAMP;
             """;
         AddParameter(command, "@ProjectName", projectName);
-        AddParameter(command, "@ProjectRootPath", projectRootPath);
         AddParameter(command, "@MachineName", Environment.MachineName);
         AddParameter(command, "@CurrentCropClass", "cerca");
         command.ExecuteNonQuery();

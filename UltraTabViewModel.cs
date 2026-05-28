@@ -590,7 +590,8 @@ public sealed class UltraTabViewModel : ViewModelBase
 
         if (!string.IsNullOrWhiteSpace(linkedSourceImagePath))
         {
-            deletedSelectionCount = await _annotationCropDbService.DeleteCropsBySourceImageAsync(_currentProjectName, linkedSourceImagePath);
+            var sourceImageKey = ProjectAssetKey.BuildSourceImageKey(_workspaceService, _currentProjectName, linkedSourceImagePath);
+            deletedSelectionCount = await _annotationCropDbService.DeleteCropsBySourceImageKeyAsync(_currentProjectName, sourceImageKey);
         }
 
         await Task.Run(() =>
@@ -606,10 +607,21 @@ public sealed class UltraTabViewModel : ViewModelBase
             }
         });
 
-        await _projectImageBlobService.DeleteImageAsync(_currentProjectName, imagePath);
+        await _projectImageBlobService.DeleteImageAsync(_currentProjectName, imagePath, sourceName switch
+        {
+            "test" => "test",
+            "train" => "dataset-train",
+            "val" => "dataset-val",
+            _ => null
+        });
         if (deleteLabel && !string.IsNullOrWhiteSpace(labelPath))
         {
-            await _projectImageBlobService.DeleteImageAsync(_currentProjectName, labelPath);
+            await _projectImageBlobService.DeleteImageAsync(_currentProjectName, labelPath, sourceName switch
+            {
+                "train" => "dataset-train",
+                "val" => "dataset-val",
+                _ => null
+            });
         }
 
         if (string.Equals(_lastDetectionImagePath, imagePath, StringComparison.OrdinalIgnoreCase))

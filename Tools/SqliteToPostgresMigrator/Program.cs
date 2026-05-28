@@ -4,6 +4,10 @@ using Microsoft.Data.Sqlite;
 using Npgsql;
 
 var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", ".."));
+var externalSchemaPath = Path.Combine(
+    Path.GetFullPath(Path.Combine(repoRoot, "..", "..", "tools")),
+    "whatjolo",
+    "whatjolo_pathless_schema.sql");
 var sqlitePath = args.Length > 0
     ? args[0]
     : @"C:\Users\jack\Documents\Playground\HID\ScrcpyKeyboardClient\AnnotationTemplates\annotations.sqlite3";
@@ -12,7 +16,7 @@ var connectionString = args.Length > 1
     : "Host=127.0.0.1;Port=5432;Database=whatjolo;Username=postgres;Password=postgres";
 var schemaPath = args.Length > 2
     ? args[2]
-    : Path.Combine(repoRoot, "pg_schema.sql");
+    : externalSchemaPath;
 
 if (!File.Exists(sqlitePath))
 {

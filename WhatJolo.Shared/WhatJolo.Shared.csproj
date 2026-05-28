@@ -13,7 +13,6 @@
   <ItemGroup>
     <Compile Include="..\ViewModelBase.cs" Link="ViewModelBase.cs" />
     <Compile Include="..\PostgresConnectionSettings.cs" Link="PostgresConnectionSettings.cs" />
-    <Compile Include="..\PostgresDatabaseMigrator.cs" Link="PostgresDatabaseMigrator.cs" />
     <Compile Include="..\SharedDatabase.cs" Link="SharedDatabase.cs" />
     <Compile Include="..\ProjectWorkspaceService.cs" Link="ProjectWorkspaceService.cs" />
     <Compile Include="..\AdbService.cs" Link="AdbService.cs" />

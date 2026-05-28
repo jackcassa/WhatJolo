@@ -11,6 +11,7 @@ public static class SharedAppBootstrap
     public static async Task EnsureConfiguredPostgresReadyAsync(Action<string>? onProgress = null)
     {
         SharedDatabase.ActivateConfiguredPostgres();
+        onProgress?.Invoke("Verifica connessione PostgreSQL configurata...");
         await Task.Run(() => SharedDatabase.EnsureDatabaseReady(message => onProgress?.Invoke(message)));
     }
 
