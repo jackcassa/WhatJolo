@@ -94,6 +94,26 @@ public sealed class AdbService
         EnsureSuccess(result, "adb shell input tap");
     }
 
+    public async Task SendTextAsync(string deviceSerial, string text)
+    {
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            throw new InvalidOperationException("Nessun device ADB selezionato.");
+        }
+
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var escapedText = text
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace(" ", "%s", StringComparison.Ordinal)
+            .Replace("\"", "\\\"", StringComparison.Ordinal);
+        var result = await RunAdbAsync($"-s {deviceSerial} shell input text \"{escapedText}\"");
+        EnsureSuccess(result, "adb shell input text");
+    }
+
     private async Task<AdbCommandResult> RunAdbAsync(string arguments)
     {
         var startInfo = new ProcessStartInfo

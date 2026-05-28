@@ -12,7 +12,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
 {
     private const string SendModelClassName = "cerca";
     private const string SendBackClassName = "back";
-    private static readonly string[] RequiredSendModelClasses = ["cerca", "back"];
+    private const string SendChatClassName = "chat";
+    private const string SendFallbackSequence = "3204751139";
+    private static readonly string[] RequiredSendModelClasses = ["cerca", "back", "chat"];
     private const float SendDetectionThreshold = 0.05f;
     private const int ImageChangeWaitAttempts = 12;
     private const int ImageChangeWaitDelayMs = 500;
@@ -184,20 +186,15 @@ internal sealed class MainWindowViewModel : ViewModelBase
         // 1. verifica progetto selezionato e disponibilità di ADB
         // 2. ricostruisce la struttura locale per l'inferenza del progetto selezionato
         //    e delle classi presenti nel progetto, ciascuna nella propria directory
-        // 3. usa quei path locali per i modelli best.onnx di "cerca" e "back"
+        // 3. usa quei path locali per i modelli best.onnx di "cerca", "back" e "chat"
         // 4. avvia il server ADB
         // 5. legge i device collegati
         // 6. acquisisce uno screenshot PNG dal primo device disponibile
         // 7. esegue YOLO alla ricerca della classe "cerca"
         // 8. se trova "cerca" fa il tap e passa al passo successivo
-        // 9. se non trova "cerca" salva l'immagine come priva_<timestamp>.png e ferma il flusso
-        // 10. aspetta che l'immagine cambi
-        // 11. aggiorna la preview con la nuova immagine
-        // 12. esegue YOLO alla ricerca della classe "back"
-        // 13. se trova "back" esegue il tap ADB sul bounding box migliore
-        // 14. se non trova "back" salva l'immagine come errore_<timestamp>.png e ferma il flusso
-        // 15. dopo il tap su "back" aspetta che arrivi una nuova immagine
-        // 16. aggiorna ancora la preview con la nuova immagine
+        // 9. se non trova "cerca" salva l'immagine come priva_<timestamp>.png, invia la sequenza,
+        //    aspetta il cambio schermata, cerca "chat" e fa tap sul box trovato
+        // 10. esegue un passaggio "back" con YOLO, tap e attesa cambio immagine
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!_adbService.Exists())
@@ -216,7 +213,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
         {
             await PrepareInferenceStructureAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            var modelPaths = await EnsureSendModelsAsync();
+            var modelPaths = EnsureSendModels();
             StatusText = $"[{SelectedProjectName}] Ciclo Send {cycleNumber}: avvio ADB...";
             await _adbService.StartServerAsync();
             cancellationToken.ThrowIfCancellationRequested();
@@ -246,66 +243,53 @@ internal sealed class MainWindowViewModel : ViewModelBase
                 attempt: searchDetection));
             var bestDetection = searchDetection.BestDetection;
 
+            byte[] currentScreenBytes;
             if (bestDetection is not null)
             {
-                var tapX = bestDetection.Bounds.Left + (bestDetection.Bounds.Width / 2);
-                var tapY = bestDetection.Bounds.Top + (bestDetection.Bounds.Height / 2);
-                StatusText = $"[{SelectedProjectName}] 'cerca' riconosciuta ({bestDetection.Confidence:P0}). Pausa di 3 secondi prima del tap ADB @ {tapX},{tapY}...";
-                await Task.Delay(TapPauseMs, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Tap ADB su 'cerca' @ {tapX},{tapY}...";
-                await _adbService.TapAsync(selectedDevice, tapX, tapY);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'cerca' ({bestDetection.Confidence:P0}) @ {tapX},{tapY}. Pausa di 3 secondi dopo il tap...";
-                await Task.Delay(TapPauseMs, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Attendo cambio schermata dopo il tap su 'cerca'...";
+                await TapDetectionAsync(selectedDevice, SendModelClassName, bestDetection, cancellationToken);
+                StatusText = $"[{SelectedProjectName}] Attendo cambio schermata dopo il tap su '{SendModelClassName}'...";
+                currentScreenBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes, cancellationToken);
             }
             else
             {
                 var privaFileName = $"priva_{timestamp}.png";
                 await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, privaFileName, "capture", pngBytes);
-                StatusText = $"[{SelectedProjectName}] 'cerca' non trovata. Immagine salvata nel DB come {privaFileName}. Flusso interrotto.";
-                return;
+                StatusText = $"[{SelectedProjectName}] '{SendModelClassName}' non trovata. Immagine salvata nel DB come {privaFileName}. Invio sequenza {SendFallbackSequence}...";
+                await _adbService.SendTextAsync(selectedDevice, SendFallbackSequence);
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(TapPauseMs, cancellationToken);
+                StatusText = $"[{SelectedProjectName}] Sequenza inviata. Attendo cambio schermata per cercare '{SendChatClassName}'...";
+                var chatScreenBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes, cancellationToken);
+                LastCapturePreview = LoadPreview(chatScreenBytes);
+
+                var chatDetection = await DetectAndLogAsync(
+                    chatScreenBytes,
+                    modelPaths[SendChatClassName],
+                    SendChatClassName,
+                    phaseName: SendChatClassName,
+                    imageName: $"adb_after_sequence_{timestamp}.png");
+                if (chatDetection.BestDetection is null)
+                {
+                    var chatPrivaFileName = $"priva_{timestamp}_chat.png";
+                    await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, chatPrivaFileName, "capture", chatScreenBytes);
+                    StatusText = $"[{SelectedProjectName}] '{SendChatClassName}' non trovata. Immagine salvata nel DB come {chatPrivaFileName}. Flusso interrotto.";
+                    return;
+                }
+
+                await TapDetectionAsync(selectedDevice, SendChatClassName, chatDetection.BestDetection, cancellationToken);
+                StatusText = $"[{SelectedProjectName}] Attendo cambio schermata dopo il tap su '{SendChatClassName}'...";
+                currentScreenBytes = await WaitForImageChangeAsync(selectedDevice, chatScreenBytes, cancellationToken);
             }
 
-            var arrowSearchBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes, cancellationToken);
-            LastCapturePreview = LoadPreview(arrowSearchBytes);
-            StatusText = $"[{SelectedProjectName}] Cambio schermata rilevato. Passo successivo: ricerca di 'back'.";
-
-            using var arrowImageStream = new MemoryStream(arrowSearchBytes);
-            using var arrowBitmap = new Bitmap(arrowImageStream);
-            StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di 'back'...";
-            var arrowAttempt = AnalyzeDetection(arrowBitmap, modelPaths[SendBackClassName], SendBackClassName);
-            await AppendYoloLogAsync(BuildYoloLogBlock(
-                phaseName: "back",
-                imageName: $"adb_after_cerca_{timestamp}.png",
-                modelPath: modelPaths[SendBackClassName],
-                attempt: arrowAttempt));
-            var arrowDetection = arrowAttempt.BestDetection;
-            if (arrowDetection is not null)
+            LastCapturePreview = LoadPreview(currentScreenBytes);
+            var backScreenBytes = await ExecuteBackStepAsync(selectedDevice, modelPaths, currentScreenBytes, $"{timestamp}_back", cancellationToken);
+            if (backScreenBytes is null)
             {
-                var tapX = arrowDetection.Bounds.Left + (arrowDetection.Bounds.Width / 2);
-                var tapY = arrowDetection.Bounds.Top + (arrowDetection.Bounds.Height / 2);
-                StatusText = $"[{SelectedProjectName}] 'back' riconosciuta ({arrowDetection.Confidence:P0}). Pausa di 3 secondi prima del tap ADB @ {tapX},{tapY}...";
-                await Task.Delay(TapPauseMs, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Tap ADB su 'back' @ {tapX},{tapY}...";
-                await _adbService.TapAsync(selectedDevice, tapX, tapY);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su 'back' ({arrowDetection.Confidence:P0}) @ {tapX},{tapY}. Pausa di 3 secondi dopo il tap...";
-                await Task.Delay(TapPauseMs, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                StatusText = $"[{SelectedProjectName}] Attendo nuova immagine dopo il tap su 'back'...";
-                var postTapImageBytes = await WaitForImageChangeAsync(selectedDevice, arrowSearchBytes, cancellationToken);
-                LastCapturePreview = LoadPreview(postTapImageBytes);
-                StatusText = $"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su 'back'.";
                 return;
             }
 
-            var errorFileName = $"errore_{timestamp}.png";
-            await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, errorFileName, "capture", arrowSearchBytes);
-            StatusText = $"[{SelectedProjectName}] 'back' non riconosciuta. Immagine salvata nel DB come {errorFileName}. Flusso interrotto.";
+            LastCapturePreview = LoadPreview(backScreenBytes);
+            StatusText = $"[{SelectedProjectName}] Ciclo Send {cycleNumber} completato con passaggio '{SendBackClassName}'.";
         }
         catch (OperationCanceledException)
         {
@@ -315,6 +299,76 @@ internal sealed class MainWindowViewModel : ViewModelBase
         {
             StatusText = $"[{SelectedProjectName}] Errore step 1 Send: {ex.Message}";
         }
+    }
+
+    private async Task<YoloDetectionAttempt> DetectAndLogAsync(
+        byte[] imageBytes,
+        string modelPath,
+        string labelName,
+        string phaseName,
+        string imageName)
+    {
+        using var imageStream = new MemoryStream(imageBytes);
+        using var bitmap = new Bitmap(imageStream);
+        StatusText = $"[{SelectedProjectName}] Esecuzione YOLO alla ricerca di '{labelName}'...";
+        var attempt = AnalyzeDetection(bitmap, modelPath, labelName);
+        await AppendYoloLogAsync(BuildYoloLogBlock(
+            phaseName,
+            imageName,
+            modelPath,
+            attempt));
+        return attempt;
+    }
+
+    private async Task TapDetectionAsync(
+        string selectedDevice,
+        string labelName,
+        YoloDetection detection,
+        CancellationToken cancellationToken)
+    {
+        var tapX = detection.Bounds.Left + (detection.Bounds.Width / 2);
+        var tapY = detection.Bounds.Top + (detection.Bounds.Height / 2);
+        StatusText = $"[{SelectedProjectName}] '{labelName}' riconosciuta ({detection.Confidence:P0}). Pausa di 3 secondi prima del tap ADB @ {tapX},{tapY}...";
+        await Task.Delay(TapPauseMs, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        StatusText = $"[{SelectedProjectName}] Tap ADB su '{labelName}' @ {tapX},{tapY}...";
+        await _adbService.TapAsync(selectedDevice, tapX, tapY);
+        cancellationToken.ThrowIfCancellationRequested();
+        StatusText = $"[{SelectedProjectName}] Tap ADB eseguito su '{labelName}' ({detection.Confidence:P0}) @ {tapX},{tapY}. Pausa di 3 secondi dopo il tap...";
+        await Task.Delay(TapPauseMs, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task<byte[]?> ExecuteBackStepAsync(
+        string selectedDevice,
+        IReadOnlyDictionary<string, string> modelPaths,
+        byte[] baselineBytes,
+        string imageSuffix,
+        CancellationToken cancellationToken)
+    {
+        LastCapturePreview = LoadPreview(baselineBytes);
+        StatusText = $"[{SelectedProjectName}] Cambio schermata rilevato. Passo successivo: ricerca di '{SendBackClassName}'.";
+        var backAttempt = await DetectAndLogAsync(
+            baselineBytes,
+            modelPaths[SendBackClassName],
+            SendBackClassName,
+            phaseName: SendBackClassName,
+            imageName: $"adb_{imageSuffix}.png");
+
+        if (backAttempt.BestDetection is null)
+        {
+            var errorFileName = $"errore_{imageSuffix}.png";
+            await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, errorFileName, "capture", baselineBytes);
+            StatusText = $"[{SelectedProjectName}] '{SendBackClassName}' non riconosciuta. Immagine salvata nel DB come {errorFileName}. Flusso interrotto.";
+            return null;
+        }
+
+        await TapDetectionAsync(selectedDevice, SendBackClassName, backAttempt.BestDetection, cancellationToken);
+        StatusText = $"[{SelectedProjectName}] Attendo nuova immagine dopo il tap su '{SendBackClassName}'...";
+        var postTapImageBytes = await WaitForImageChangeAsync(selectedDevice, baselineBytes, cancellationToken);
+        LastCapturePreview = LoadPreview(postTapImageBytes);
+        StatusText = $"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su '{SendBackClassName}'.";
+        return postTapImageBytes;
     }
 
     private async Task ConnectAndLoadProjectsAsync()
@@ -372,7 +426,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return bitmap;
     }
 
-    private async Task<Dictionary<string, string>> EnsureSendModelsAsync()
+    private Dictionary<string, string> EnsureSendModels()
     {
         var modelPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
