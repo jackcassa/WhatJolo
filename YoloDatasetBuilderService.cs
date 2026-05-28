@@ -57,25 +57,14 @@ internal sealed class YoloDatasetBuilderService
             .ToDictionary(item => item.label, item => item.index, StringComparer.OrdinalIgnoreCase);
 
         File.WriteAllLines(Path.Combine(datasetFolder, "classes.txt"), normalizedClasses, Encoding.UTF8);
-        var imageMapLines = new List<string> { "split\tdatasetImagePath\tsourceImagePath" };
+        var imageMapLines = new List<string> { "split\tdatasetImagePath\tsourceImageKey" };
 
-        var capturesFolder = _workspaceService.GetCapturesPath(projectName);
-        var projectCaptureImages = Directory.Exists(capturesFolder)
-            ? Directory
-                .EnumerateFiles(capturesFolder, "*.*", SearchOption.TopDirectoryOnly)
-                .Where(static filePath => IsSupportedImagePath(filePath))
-                .Select(Path.GetFullPath)
-            : Enumerable.Empty<string>();
-
-        var annotatedSourceImages = records
-            .Select(record => Path.GetFullPath(record.SourceImagePath));
-
+        var projectCaptureImages = await _projectImageBlobService.GetProjectImagesByKindsAsync(projectName, "capture");
         var allSourceImages = projectCaptureImages
-            .Concat(annotatedSourceImages)
+            .Select(static image => image.ImageKey)
+            .Concat(records.Select(static record => record.SourceImageKey))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(File.Exists)
-            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static path => path, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static key => key, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         if (allSourceImages.Length == 0)
@@ -84,7 +73,7 @@ internal sealed class YoloDatasetBuilderService
         }
 
         var recordsBySourceImage = records
-            .GroupBy(record => Path.GetFullPath(record.SourceImagePath), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(record => record.SourceImageKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
 
         var imageCount = allSourceImages.Length;
@@ -92,16 +81,22 @@ internal sealed class YoloDatasetBuilderService
 
         for (var index = 0; index < allSourceImages.Length; index++)
         {
-            var sourceImagePath = allSourceImages[index];
+            var sourceImageKey = allSourceImages[index];
             var isValidation = imageCount > 1 && index >= validationStartIndex;
             var imageTargetFolder = isValidation ? imagesValFolder : imagesTrainFolder;
             var labelTargetFolder = isValidation ? labelsValFolder : labelsTrainFolder;
 
-            var groupRecords = recordsBySourceImage.TryGetValue(sourceImagePath, out var matchedRecords)
+            var groupRecords = recordsBySourceImage.TryGetValue(sourceImageKey, out var matchedRecords)
                 ? matchedRecords
                 : Array.Empty<ProjectCropRecord>();
 
-            using var imageStream = File.OpenRead(sourceImagePath);
+            var sourceImageBytes = await _projectImageBlobService.GetImageBytesByKeyAsync(projectName, sourceImageKey);
+            if (sourceImageBytes == null || sourceImageBytes.Length == 0)
+            {
+                continue;
+            }
+
+            using var imageStream = new MemoryStream(sourceImageBytes);
             var bitmapFrame = BitmapFrame.Create(imageStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
             var imageWidth = bitmapFrame.PixelWidth;
             var imageHeight = bitmapFrame.PixelHeight;
@@ -110,17 +105,18 @@ internal sealed class YoloDatasetBuilderService
                 continue;
             }
 
-            var fileStem = BuildDatasetImageStem(index, sourceImagePath);
-            var extension = Path.GetExtension(sourceImagePath);
+            var sourceFileName = BuildSourceFileName(sourceImageKey);
+            var fileStem = BuildDatasetImageStem(index, sourceFileName);
+            var extension = Path.GetExtension(sourceFileName);
             if (string.IsNullOrWhiteSpace(extension))
             {
                 extension = ".png";
             }
 
             var targetImagePath = Path.Combine(imageTargetFolder, fileStem + extension.ToLowerInvariant());
-            File.Copy(sourceImagePath, targetImagePath, overwrite: true);
+            await File.WriteAllBytesAsync(targetImagePath, sourceImageBytes);
             await _projectImageBlobService.SaveImageAsync(projectName, targetImagePath, isValidation ? "dataset-val" : "dataset-train");
-            imageMapLines.Add($"{(isValidation ? "val" : "train")}\t{targetImagePath}\t{sourceImagePath}");
+            imageMapLines.Add($"{(isValidation ? "val" : "train")}\t{targetImagePath}\t{sourceImageKey}");
 
             var yoloLines = new List<string>();
             foreach (var record in groupRecords)
@@ -215,18 +211,16 @@ internal sealed class YoloDatasetBuilderService
             .ToDictionary(item => item.label, item => item.index, StringComparer.OrdinalIgnoreCase);
 
         var recordsBySourceImage = records
-            .GroupBy(record => Path.GetFullPath(record.SourceImagePath), StringComparer.OrdinalIgnoreCase)
+            .GroupBy(record => record.SourceImageKey, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
 
         var allSourceImages = recordsBySourceImage.Keys
-            .Where(File.Exists)
-            .OrderBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static path => path, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static key => key, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         if (allSourceImages.Length == 0)
         {
-            throw new InvalidOperationException("Le immagini sorgente annotate del progetto non sono disponibili su disco.");
+            throw new InvalidOperationException("Le immagini sorgente annotate del progetto non sono disponibili nel DB.");
         }
 
         var imageMapLines = File.Exists(imageMapPath)
@@ -237,15 +231,21 @@ internal sealed class YoloDatasetBuilderService
 
         if (imageMapLines.Count == 0)
         {
-            imageMapLines.Add("split\tdatasetImagePath\tsourceImagePath");
+            imageMapLines.Add("split\tdatasetImagePath\tsourceImageKey");
         }
 
         for (var index = 0; index < allSourceImages.Length; index++)
         {
-            var sourceImagePath = allSourceImages[index];
-            var groupRecords = recordsBySourceImage[sourceImagePath];
+            var sourceImageKey = allSourceImages[index];
+            var groupRecords = recordsBySourceImage[sourceImageKey];
 
-            using var imageStream = File.OpenRead(sourceImagePath);
+            var sourceImageBytes = await _projectImageBlobService.GetImageBytesByKeyAsync(projectName, sourceImageKey);
+            if (sourceImageBytes == null || sourceImageBytes.Length == 0)
+            {
+                continue;
+            }
+
+            using var imageStream = new MemoryStream(sourceImageBytes);
             var bitmapFrame = BitmapFrame.Create(imageStream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
             var imageWidth = bitmapFrame.PixelWidth;
             var imageHeight = bitmapFrame.PixelHeight;
@@ -254,17 +254,18 @@ internal sealed class YoloDatasetBuilderService
                 continue;
             }
 
-            var fileStem = BuildDatasetImageStem(index, sourceImagePath);
-            var extension = Path.GetExtension(sourceImagePath);
+            var sourceFileName = BuildSourceFileName(sourceImageKey);
+            var fileStem = BuildDatasetImageStem(index, sourceFileName);
+            var extension = Path.GetExtension(sourceFileName);
             if (string.IsNullOrWhiteSpace(extension))
             {
                 extension = ".png";
             }
 
             var targetImagePath = Path.Combine(imagesTestFolder, fileStem + extension.ToLowerInvariant());
-            File.Copy(sourceImagePath, targetImagePath, overwrite: true);
+            await File.WriteAllBytesAsync(targetImagePath, sourceImageBytes);
             await _projectImageBlobService.SaveImageAsync(projectName, targetImagePath, "dataset-test");
-            imageMapLines.Add($"test\t{targetImagePath}\t{sourceImagePath}");
+            imageMapLines.Add($"test\t{targetImagePath}\t{sourceImageKey}");
 
             var yoloLines = new List<string>();
             foreach (var record in groupRecords)
@@ -346,6 +347,17 @@ internal sealed class YoloDatasetBuilderService
         }
 
         return $"{index + 1:D4}_{safeName}";
+    }
+
+    private static string BuildSourceFileName(string imageKey)
+    {
+        var parts = imageKey.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length switch
+        {
+            >= 3 => parts[2],
+            2 => parts[1],
+            _ => imageKey
+        };
     }
 }
 

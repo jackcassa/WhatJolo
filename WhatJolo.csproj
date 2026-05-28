@@ -23,7 +23,9 @@
     <Compile Remove="PostgresConnectionSettings.cs" />
     <Compile Remove="SharedDatabase.cs" />
     <Compile Remove="ProjectWorkspaceService.cs" />
+    <Compile Remove="ProjectAssetKey.cs" />
     <Compile Remove="AdbService.cs" />
+    <Compile Remove="ProjectImageBlobService.cs" />
     <Compile Remove="ProjectModelBlobService.cs" />
     <Compile Remove="YoloIconDetector.cs" />
     <Page Remove="Navigation\**\*.xaml" />

@@ -10,9 +10,19 @@ public static class SharedAppBootstrap
 {
     public static async Task EnsureConfiguredPostgresReadyAsync(Action<string>? onProgress = null)
     {
+        AppDebugLog.Info("DB/Autoconnect", "Autoconnect PostgreSQL avviato.");
         SharedDatabase.ActivateConfiguredPostgres();
         onProgress?.Invoke("Verifica connessione PostgreSQL configurata...");
-        await Task.Run(() => SharedDatabase.EnsureDatabaseReady(message => onProgress?.Invoke(message)));
+        try
+        {
+            await Task.Run(() => SharedDatabase.EnsureDatabaseReady(message => onProgress?.Invoke(message)));
+            AppDebugLog.Info("DB/Autoconnect", "Autoconnect PostgreSQL completato con successo.");
+        }
+        catch (Exception ex)
+        {
+            AppDebugLog.Error("DB/Autoconnect", "Autoconnect PostgreSQL fallito.", ex);
+            throw;
+        }
     }
 
     public static async Task<ProjectCatalogSnapshot> LoadProjectCatalogAsync(

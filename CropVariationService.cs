@@ -7,13 +7,11 @@ namespace WhatJolo;
 
 internal sealed class CropVariationService
 {
-    private readonly ProjectWorkspaceService _workspaceService;
     private readonly AnnotationCropDbService _annotationCropDbService;
     private readonly ProjectImageBlobService _projectImageBlobService;
 
     public CropVariationService()
     {
-        _workspaceService = new ProjectWorkspaceService();
         _annotationCropDbService = new AnnotationCropDbService();
         _projectImageBlobService = new ProjectImageBlobService();
     }
@@ -25,12 +23,13 @@ internal sealed class CropVariationService
             return Array.Empty<string>();
         }
 
-        if (!File.Exists(sourceRecord.SourceImagePath))
+        var sourceBytes = await _projectImageBlobService.GetImageBytesByKeyAsync(sourceRecord.ProjectName, sourceRecord.SourceImageKey);
+        if (sourceBytes == null || sourceBytes.Length == 0)
         {
-            throw new FileNotFoundException("Immagine sorgente della crop non trovata.", sourceRecord.SourceImagePath);
+            throw new InvalidOperationException("Immagine sorgente della crop non trovata nel DB.");
         }
 
-        var sourceBitmap = LoadBitmapSource(sourceRecord.SourceImagePath);
+        var sourceBitmap = LoadBitmapSource(sourceBytes);
         var sourceWidth = sourceBitmap.PixelWidth;
         var sourceHeight = sourceBitmap.PixelHeight;
         if (sourceWidth <= 0 || sourceHeight <= 0)
@@ -53,12 +52,6 @@ internal sealed class CropVariationService
         }
 
         var safeClass = sourceRecord.LabelName.Trim().ToLowerInvariant();
-        var capturesRoot = _workspaceService.GetCapturesPath(sourceRecord.ProjectName);
-        var variationSourcesDirectory = Path.Combine(capturesRoot, "Variations");
-        var variationCropsDirectory = Path.Combine(_workspaceService.GetSavedCropsPath(sourceRecord.ProjectName), safeClass);
-        Directory.CreateDirectory(variationSourcesDirectory);
-        Directory.CreateDirectory(variationCropsDirectory);
-
         var centerX = sourceRecord.X + (sourceRecord.Width / 2d);
         var centerY = sourceRecord.Y + (sourceRecord.Height / 2d);
         var seed = Guid.NewGuid().GetHashCode() ^ Environment.TickCount ^ Random.Shared.Next();
@@ -73,24 +66,25 @@ internal sealed class CropVariationService
 
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
             var uniqueSuffix = $"{timestamp}_{index + 1:D2}_{Math.Abs(random.Next())}";
-            var sourceOutputPath = Path.Combine(variationSourcesDirectory, $"adb_capture_var_{uniqueSuffix}.png");
-            var cropOutputPath = Path.Combine(variationCropsDirectory, $"{safeClass}_var_{uniqueSuffix}.png");
-
-            await SaveBitmapSourceAsPngAsync(transformedBitmap, sourceOutputPath);
-            await _projectImageBlobService.SaveImageAsync(sourceRecord.ProjectName, sourceOutputPath, "variation-source");
+            var sourceFileName = $"adb_capture_var_{uniqueSuffix}.png";
+            var cropFileName = $"{safeClass}_var_{uniqueSuffix}.png";
+            var sourceImageKey = $"variation-source|{sourceFileName}";
+            var cropImageKey = $"variation-crop|{safeClass}|{cropFileName}";
+            var variationSourceBytes = SaveBitmapSourceAsPngBytes(transformedBitmap);
 
             var cropBitmap = new CroppedBitmap(transformedBitmap, selectionRect);
-            await SaveBitmapSourceAsPngAsync(cropBitmap, cropOutputPath);
-            await _projectImageBlobService.SaveImageAsync(sourceRecord.ProjectName, cropOutputPath, "variation-crop");
-            await _annotationCropDbService.SaveCropAsync(
+            var cropBytes = SaveBitmapSourceAsPngBytes(cropBitmap);
+            await _annotationCropDbService.SaveVariationAsync(
                 sourceRecord.ProjectName,
                 safeClass,
-                sourceOutputPath,
-                cropOutputPath,
-                selectionRect,
-                isVariation: true);
+                sourceRecord.CropImageKey,
+                sourceImageKey,
+                cropImageKey,
+                variationSourceBytes,
+                cropBytes,
+                selectionRect);
 
-            results.Add(cropOutputPath);
+            results.Add(cropImageKey);
         }
 
         return results;
@@ -128,10 +122,10 @@ internal sealed class CropVariationService
         return renderTarget;
     }
 
-    private static BitmapImage LoadBitmapSource(string filePath)
+    private static BitmapImage LoadBitmapSource(byte[] imageBytes)
     {
         var image = new BitmapImage();
-        using var stream = File.OpenRead(filePath);
+        using var stream = new MemoryStream(imageBytes);
         image.BeginInit();
         image.CacheOption = BitmapCacheOption.OnLoad;
         image.CreateOptions = BitmapCreateOptions.PreservePixelFormat;
@@ -141,13 +135,13 @@ internal sealed class CropVariationService
         return image;
     }
 
-    private static async Task SaveBitmapSourceAsPngAsync(BitmapSource bitmap, string outputPath)
+    private static byte[] SaveBitmapSourceAsPngBytes(BitmapSource bitmap)
     {
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
-
-        await using var stream = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        using var stream = new MemoryStream();
         encoder.Save(stream);
+        return stream.ToArray();
     }
 
     private static double NextDouble(Random random, double minValue, double maxValue)

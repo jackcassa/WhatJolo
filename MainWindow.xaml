@@ -222,12 +222,6 @@
                             BorderThickness="1"
                             CornerRadius="8">
                         <StackPanel>
-                            <Button Height="48"
-                                    FontSize="16"
-                                    FontWeight="Bold"
-                                    Content="Acquisisci screenshot ADB"
-                                    Click="CaptureAdbScreenshot_Click" />
-
                             <TextBlock Margin="0,16,0,0"
                                        FontWeight="SemiBold"
                                        Foreground="{StaticResource AccentBrush}"
@@ -236,26 +230,50 @@
                                       ItemsSource="{Binding AdbCaptureTab.ConnectedDevices}"
                                       SelectedItem="{Binding AdbCaptureTab.SelectedDeviceSerial}" />
 
-                            <Button Margin="0,10,0,0"
-                                    Height="40"
-                                    FontSize="14"
-                                    FontWeight="Bold"
-                                    Content="Aggiorna lista device"
-                                    Click="RefreshDevices_Click" />
+                            <UniformGrid Margin="0,12,0,0"
+                                         Columns="2">
+                                <Button Margin="0,0,6,8"
+                                        Height="44"
+                                        FontSize="14"
+                                        FontWeight="Bold"
+                                        Content="Acquisisci ADB"
+                                        Click="CaptureAdbScreenshot_Click" />
 
-                            <Button Margin="0,10,0,0"
-                                    Height="40"
-                                    FontSize="14"
-                                    FontWeight="Bold"
-                                    Content="Variazione x10"
-                                    Click="GenerateVariations_Click" />
+                                <Button Margin="6,0,0,8"
+                                        Height="44"
+                                        FontSize="14"
+                                        FontWeight="Bold"
+                                        Content="Aggiorna device"
+                                        Click="RefreshDevices_Click" />
 
-                            <Button Margin="0,10,0,0"
-                                    Height="40"
-                                    FontSize="14"
-                                    FontWeight="Bold"
-                                    Content="Variazioni per tutte"
-                                    Click="GenerateVariationsForAll_Click" />
+                                <Button Margin="0,0,6,8"
+                                        Height="40"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Carica da file"
+                                        Click="ImportCaptureFromFile_Click" />
+
+                                <Button Margin="6,0,0,8"
+                                        Height="40"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Variazioni..."
+                                        Click="GenerateVariations_Click" />
+
+                                <Button Margin="0,0,6,0"
+                                        Height="40"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Varia tutte"
+                                        Click="GenerateVariationsForAll_Click" />
+
+                                <Button Margin="6,0,0,0"
+                                        Height="40"
+                                        FontSize="13"
+                                        FontWeight="Bold"
+                                        Content="Cancella variaz."
+                                        Click="DeleteAllVariations_Click" />
+                            </UniformGrid>
 
                             <Separator Margin="0,16,0,16" />
 
@@ -273,45 +291,77 @@
                             <TextBlock Margin="0,6,0,0"
                                        Text="{Binding AdbCaptureTab.LastCapturePath}"
                                        TextWrapping="Wrap" />
-
-                            <TextBlock Margin="0,16,0,0"
-                                       FontWeight="SemiBold"
-                                       Foreground="{StaticResource AccentBrush}"
-                                       Text="{Binding AdbCaptureTab.CapturedImageCount, StringFormat=Capture acquisite ({0})}" />
-                            <ListBox Margin="0,6,0,0"
-                                     Height="180"
-                                     ItemsSource="{Binding AdbCaptureTab.CapturedImages}"
-                                     SelectedItem="{Binding AdbCaptureTab.SelectedCapturedImage}"
-                                     SelectionChanged="CapturedImages_SelectionChanged">
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <DockPanel Margin="4">
-                                            <Image Width="44"
-                                                   Height="44"
-                                                   Margin="0,0,8,0"
-                                                   Stretch="Uniform"
-                                                   Source="{Binding PreviewImage}" />
-                                            <TextBlock VerticalAlignment="Center"
-                                                       Text="{Binding FileName}"
-                                                       TextWrapping="Wrap" />
-                                        </DockPanel>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
                         </StackPanel>
                     </Border>
 
                     <Grid Grid.Row="1"
                           Grid.Column="2"
                           Margin="0,12,0,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="12" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="4*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
 
-                        <GroupBox Header="{Binding AdbCaptureTab.SavedCropCount, StringFormat=Crop salvate ({0})}">
-                            <ListBox x:Name="SavedCropsListBox"
+                        <Grid Grid.Column="0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="12" />
+                                <RowDefinition Height="*" />
+                                <RowDefinition Height="12" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <GroupBox Header="{Binding AdbCaptureTab.CapturedImageCount, StringFormat=Immagini acquisite ({0})}">
+                                <ListBox ItemsSource="{Binding AdbCaptureTab.CapturedImages}"
+                                         SelectedItem="{Binding AdbCaptureTab.SelectedCapturedImage}"
+                                         SelectionChanged="CapturedImages_SelectionChanged"
+                                         KeyDown="CapturedImagesList_KeyDown"
+                                         MouseDoubleClick="CapturedImages_MouseDoubleClick"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8"
+                                                    Padding="8"
+                                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                                    BorderBrush="{StaticResource BorderBrushStrong}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6"
+                                                    Width="180"
+                                                    MinHeight="104">
+                                                <StackPanel>
+                                                    <Image Height="64"
+                                                           Stretch="Uniform"
+                                                           Source="{Binding PreviewImage}" />
+                                                    <TextBlock Margin="0,8,0,0"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource AccentBrush}"
+                                                               Text="{Binding FileName}"
+                                                               TextWrapping="Wrap"
+                                                               TextAlignment="Center" />
+                                                    <TextBlock Margin="0,4,0,0"
+                                                               FontSize="11"
+                                                               Foreground="{StaticResource ForegroundMutedBrush}"
+                                                               Text="{Binding ImageKey}"
+                                                               TextWrapping="Wrap"
+                                                               TextAlignment="Center"
+                                                               MaxHeight="34" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </GroupBox>
+
+                            <GroupBox Grid.Row="2"
+                                      Header="{Binding AdbCaptureTab.SavedCropCount, StringFormat=Crop selezionate per immagine ({0})}">
+                                <ListBox x:Name="SavedCropsListBox"
                                      ItemsSource="{Binding AdbCaptureTab.SavedCrops}"
                                      SelectedItem="{Binding AdbCaptureTab.SelectedSavedCrop}"
                                      SelectionMode="Extended"
@@ -319,90 +369,124 @@
                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
                                      SelectionChanged="SavedCropsList_SelectionChanged"
                                      KeyDown="SavedCropsList_KeyDown">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Margin="0,0,0,8"
-                                                Padding="8"
-                                                Background="{StaticResource PanelAltBackgroundBrush}"
-                                                BorderBrush="{StaticResource BorderBrushStrong}"
-                                                BorderThickness="1"
-                                                CornerRadius="6"
-                                                Width="96">
-                                            <StackPanel>
-                                                <Image Height="52"
-                                                       Stretch="Uniform"
-                                                       Source="{Binding PreviewImage}" />
-                                                <TextBlock Margin="0,6,0,0"
-                                                           FontSize="10"
-                                                           FontWeight="SemiBold"
-                                                           Foreground="{StaticResource AccentBrush}"
-                                                           Text="{Binding LabelName}"
-                                                           TextAlignment="Center" />
-                                                <TextBlock Margin="0,8,0,0"
-                                                           FontSize="10"
-                                                           Text="{Binding FileName}"
-                                                           TextWrapping="Wrap"
-                                                           MaxHeight="36" />
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
-                        </GroupBox>
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8"
+                                                    Padding="8"
+                                                    MinHeight="150"
+                                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                                    BorderBrush="{StaticResource BorderBrushStrong}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6"
+                                                    Width="120">
+                                                <StackPanel>
+                                                    <Image Height="76"
+                                                           Stretch="Uniform"
+                                                           Source="{Binding PreviewImage}" />
+                                                    <TextBlock Margin="0,6,0,0"
+                                                               FontSize="10"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource AccentBrush}"
+                                                               Text="{Binding LabelName}"
+                                                               TextAlignment="Center" />
+                                                    <TextBlock Margin="0,8,0,0"
+                                                               FontSize="10"
+                                                               Text="{Binding FileName}"
+                                                               TextWrapping="Wrap"
+                                                               MaxHeight="36" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </GroupBox>
 
-                        <GroupBox Grid.Row="2"
-                                  Header="{Binding AdbCaptureTab.VariationCropCount, StringFormat=Variazioni ({0})}">
-                            <ListBox ItemsSource="{Binding AdbCaptureTab.VariationCrops}"
-                                     SelectedItem="{Binding AdbCaptureTab.SelectedVariationCrop}"
-                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                     SelectionChanged="VariationCropsList_SelectionChanged"
-                                     KeyDown="VariationCropsList_KeyDown">
-                                <ListBox.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ListBox.ItemsPanel>
-                                <ListBox.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Margin="0,0,0,8"
-                                                Padding="8"
-                                                Background="{StaticResource PanelAltBackgroundBrush}"
-                                                BorderBrush="{StaticResource AccentOrangeBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="6"
-                                                Width="96">
-                                            <StackPanel>
-                                                <Image Height="52"
-                                                       Stretch="Uniform"
-                                                       Source="{Binding PreviewImage}" />
-                                                <TextBlock Margin="0,6,0,0"
-                                                           FontSize="10"
-                                                           FontWeight="SemiBold"
-                                                           Foreground="{StaticResource AccentOrangeBrush}"
-                                                           Text="variazione"
-                                                           TextAlignment="Center" />
-                                                <TextBlock Margin="0,4,0,0"
-                                                           FontSize="10"
-                                                           FontWeight="SemiBold"
-                                                           Foreground="{StaticResource AccentBrush}"
-                                                           Text="{Binding LabelName}"
-                                                           TextAlignment="Center" />
-                                                <TextBlock Margin="0,8,0,0"
-                                                           FontSize="10"
-                                                           Text="{Binding FileName}"
-                                                           TextWrapping="Wrap"
-                                                           MaxHeight="36" />
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ListBox.ItemTemplate>
-                            </ListBox>
+                            <GroupBox Grid.Row="4"
+                                      Header="{Binding AdbCaptureTab.VariationCropCount, StringFormat=Variazioni per crop ({0})}">
+                                <ListBox ItemsSource="{Binding AdbCaptureTab.VariationCrops}"
+                                         SelectedItem="{Binding AdbCaptureTab.SelectedVariationCrop}"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         SelectionChanged="VariationCropsList_SelectionChanged"
+                                         KeyDown="VariationCropsList_KeyDown">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,0,8"
+                                                    Padding="8"
+                                                    MinHeight="166"
+                                                    Background="{StaticResource PanelAltBackgroundBrush}"
+                                                    BorderBrush="{StaticResource AccentOrangeBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="6"
+                                                    Width="120">
+                                                <StackPanel>
+                                                    <Image Height="76"
+                                                           Stretch="Uniform"
+                                                           Source="{Binding PreviewImage}" />
+                                                    <TextBlock Margin="0,6,0,0"
+                                                               FontSize="10"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource AccentOrangeBrush}"
+                                                               Text="variazione"
+                                                               TextAlignment="Center" />
+                                                    <TextBlock Margin="0,4,0,0"
+                                                               FontSize="10"
+                                                               FontWeight="SemiBold"
+                                                               Foreground="{StaticResource AccentBrush}"
+                                                               Text="{Binding LabelName}"
+                                                               TextAlignment="Center" />
+                                                    <TextBlock Margin="0,8,0,0"
+                                                               FontSize="10"
+                                                               Text="{Binding FileName}"
+                                                               TextWrapping="Wrap"
+                                                               MaxHeight="36" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </GroupBox>
+                        </Grid>
+
+                        <GroupBox Grid.Column="2"
+                                  Header="Anteprima selezione">
+                            <Border Margin="6"
+                                    Padding="8"
+                                    Background="{StaticResource AppBackgroundBrush}"
+                                    BorderBrush="{StaticResource BorderBrushStrong}"
+                                    BorderThickness="1"
+                                    CornerRadius="6">
+                                <Grid>
+                                    <Image Stretch="Uniform"
+                                           Source="{Binding AdbCaptureTab.SelectedObjectPreview}" />
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource ForegroundMutedBrush}"
+                                               FontStyle="Italic"
+                                               Text="Nessuna preview disponibile">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding AdbCaptureTab.SelectedObjectPreview}" Value="{x:Null}">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Border>
                         </GroupBox>
                     </Grid>
 
@@ -484,7 +568,7 @@
                                     Height="40"
                                     FontSize="14"
                                     FontWeight="Bold"
-                                    Content="Variazione x10"
+                                    Content="Variazioni..."
                                     Click="GenerateVariations_Click" />
 
                             <Separator Margin="0,16,0,16" />

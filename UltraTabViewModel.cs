@@ -254,19 +254,15 @@ public sealed class UltraTabViewModel : ViewModelBase
             return;
         }
 
-        var outputDirectory = Path.Combine(Path.GetTempPath(), "WhatJolo", "UltraPreview", BuildSafeProjectName(_currentProjectName));
-        Directory.CreateDirectory(outputDirectory);
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-        var outputPath = Path.Combine(outputDirectory, $"adb_preview_{timestamp}.png");
 
         StatusText = $"[{_currentProjectName}] Acquisizione preview ADB in corso...";
         var pngBytes = await _adbService.CapturePngAsync(deviceSerial);
-        await File.WriteAllBytesAsync(outputPath, pngBytes);
 
         SelectedTestImage = null;
         SelectedTrainImage = null;
         SelectedValImage = null;
-        await DetectImageAsync(new TestImageItem(outputPath, Path.GetFileName(outputPath)), "preview adb");
+        await DetectImageAsync(new TestImageItem(string.Empty, $"adb_preview_{timestamp}.png", pngBytes), "preview adb");
     }
 
     public async Task TapBestPreviewDetectionAsync(string? deviceSerial)
@@ -411,7 +407,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
 
         if (!string.Equals(_lastDetectionSourceName, "test", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(_lastDetectionImagePath, SelectedTestImage.FilePath, StringComparison.OrdinalIgnoreCase))
+            !string.Equals(_lastDetectionImagePath, GetImageIdentity(SelectedTestImage), StringComparison.OrdinalIgnoreCase))
         {
             await DetectTestImageAsync();
         }
@@ -428,7 +424,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
 
         if (!string.Equals(_lastDetectionSourceName, "test", StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(_lastDetectionImagePath, SelectedTestImage.FilePath, StringComparison.OrdinalIgnoreCase))
+            !string.Equals(_lastDetectionImagePath, GetImageIdentity(SelectedTestImage), StringComparison.OrdinalIgnoreCase))
         {
             await DetectTestImageAsync();
         }
@@ -443,9 +439,16 @@ public sealed class UltraTabViewModel : ViewModelBase
             return 0;
         }
 
-        var promotedSourceImagePath = MoveTestImageToCaptures(SelectedTestImage.FilePath);
+        var sourceImageBytes = GetImageBytes(SelectedTestImage);
+        if (sourceImageBytes == null || sourceImageBytes.Length == 0)
+        {
+            StatusText = $"[{_currentProjectName}] Immagine test non disponibile per la promozione.";
+            return 0;
+        }
+
+        var promotedSourceImage = await PromoteTestImageToCaptureAsync(SelectedTestImage, sourceImageBytes);
         var savedCount = 0;
-        using var sourceBitmap = new Bitmap(promotedSourceImagePath);
+        using var sourceBitmap = CreateBitmap(sourceImageBytes);
         foreach (var detection in detections)
         {
             var safeLabel = detection.Label.Trim().ToLowerInvariant();
@@ -460,24 +463,22 @@ public sealed class UltraTabViewModel : ViewModelBase
                 continue;
             }
 
-            var outputDirectory = Path.Combine(_workspaceService.GetSavedCropsPath(_currentProjectName), safeLabel);
-            Directory.CreateDirectory(outputDirectory);
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-            var outputPath = Path.Combine(outputDirectory, $"{safeLabel}_auto_{timestamp}_{savedCount + 1}.png");
+            var cropFileName = $"{safeLabel}_auto_{timestamp}_{savedCount + 1}.png";
+            var cropImageKey = $"crop|{safeLabel}|{cropFileName}";
 
             using (var cropBitmap = sourceBitmap.Clone(bounds, sourceBitmap.PixelFormat))
             {
-                cropBitmap.Save(outputPath, ImageFormat.Png);
+                using var cropStream = new MemoryStream();
+                cropBitmap.Save(cropStream, ImageFormat.Png);
+                await _annotationCropDbService.SaveCropAsync(
+                    _currentProjectName,
+                    safeLabel,
+                    promotedSourceImage.ImageKey,
+                    cropImageKey,
+                    cropStream.ToArray(),
+                    new Int32Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
             }
-
-            await _projectImageBlobService.SaveImageAsync(_currentProjectName, outputPath, "crop");
-
-            await _annotationCropDbService.SaveCropAsync(
-                _currentProjectName,
-                safeLabel,
-                promotedSourceImagePath,
-                outputPath,
-                new Int32Rect(bounds.X, bounds.Y, bounds.Width, bounds.Height));
 
             savedCount++;
         }
@@ -497,7 +498,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            DetectionPreview = LoadBitmapImage(selectedImage.FilePath);
+            DetectionPreview = LoadBitmapImage(selectedImage);
             DetectionsSummary = $"Modello ONNX dal DB non disponibile.{Environment.NewLine}{ex.Message}";
             StatusText = $"[{_currentProjectName}] Errore caricamento modello Ultra dal DB: {ex.Message}";
             return;
@@ -512,7 +513,7 @@ public sealed class UltraTabViewModel : ViewModelBase
         ModelPath = modelPath;
         if (!File.Exists(modelPath))
         {
-            DetectionPreview = LoadBitmapImage(selectedImage.FilePath);
+            DetectionPreview = LoadBitmapImage(selectedImage);
             DetectionsSummary = $"Modello ONNX non trovato.{Environment.NewLine}Path atteso: {modelPath}";
             StatusText = $"[{_currentProjectName}] Modello ONNX non trovato: {modelPath}";
             return;
@@ -522,10 +523,10 @@ public sealed class UltraTabViewModel : ViewModelBase
 
         var detectionResult = await Task.Run(() =>
         {
-            using var bitmap = new Bitmap(selectedImage.FilePath);
+            using var bitmap = CreateBitmap(selectedImage);
             using var detector = new YoloIconDetector(modelPath);
             var debugResult = detector.DetectDebug(bitmap, DetectionThreshold);
-            var groundTruthBoxes = LoadGroundTruthBoxes(selectedImage.FilePath, bitmap.Width, bitmap.Height);
+            var groundTruthBoxes = LoadGroundTruthBoxes(selectedImage, bitmap.Width, bitmap.Height);
             var validationMetrics = ComputeValidationMetrics(debugResult.Detections, groundTruthBoxes);
             using var annotated = DrawDetections(bitmap, debugResult.Detections, groundTruthBoxes);
             var lines = new List<string>
@@ -575,7 +576,7 @@ public sealed class UltraTabViewModel : ViewModelBase
 
         DetectionPreview = detectionResult.Preview;
         DetectionsSummary = string.Join(Environment.NewLine, detectionResult.Lines);
-        _lastDetectionImagePath = selectedImage.FilePath;
+        _lastDetectionImagePath = GetImageIdentity(selectedImage);
         _lastDetectionSourceName = sourceName;
         _lastDetections = detectionResult.Detections;
         StatusText = $"[{_currentProjectName}] Detection completata su {selectedImage.FileName} ({sourceName}): {detectionResult.FinalDetectionCount} oggetti.";
@@ -585,14 +586,6 @@ public sealed class UltraTabViewModel : ViewModelBase
     {
         var imagePath = selectedImage.FilePath;
         var labelPath = deleteLabel ? ResolveLabelPath(imagePath) : null;
-        var linkedSourceImagePath = ResolveLinkedSourceImagePath(imagePath, sourceName);
-        var deletedSelectionCount = 0;
-
-        if (!string.IsNullOrWhiteSpace(linkedSourceImagePath))
-        {
-            var sourceImageKey = ProjectAssetKey.BuildSourceImageKey(_workspaceService, _currentProjectName, linkedSourceImagePath);
-            deletedSelectionCount = await _annotationCropDbService.DeleteCropsBySourceImageKeyAsync(_currentProjectName, sourceImageKey);
-        }
 
         await Task.Run(() =>
         {
@@ -624,7 +617,7 @@ public sealed class UltraTabViewModel : ViewModelBase
             });
         }
 
-        if (string.Equals(_lastDetectionImagePath, imagePath, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(_lastDetectionImagePath, GetImageIdentity(selectedImage), StringComparison.OrdinalIgnoreCase))
         {
             DetectionPreview = null;
             DetectionsSummary = "-";
@@ -655,8 +648,8 @@ public sealed class UltraTabViewModel : ViewModelBase
         }
 
         StatusText = deleteLabel
-            ? $"[{_currentProjectName}] File {sourceName} eliminato con label: {Path.GetFileName(imagePath)} | selezioni rimosse: {deletedSelectionCount}"
-            : $"[{_currentProjectName}] File {sourceName} eliminato: {Path.GetFileName(imagePath)} | selezioni rimosse: {deletedSelectionCount}";
+            ? $"[{_currentProjectName}] File {sourceName} eliminato con label: {Path.GetFileName(imagePath)}"
+            : $"[{_currentProjectName}] File {sourceName} eliminato: {Path.GetFileName(imagePath)}";
     }
 
     private string DetectModelPath()
@@ -727,9 +720,9 @@ public sealed class UltraTabViewModel : ViewModelBase
         return null;
     }
 
-    private List<GroundTruthBox> LoadGroundTruthBoxes(string imagePath, int imageWidth, int imageHeight)
+    private List<GroundTruthBox> LoadGroundTruthBoxes(TestImageItem image, int imageWidth, int imageHeight)
     {
-        var labelPath = ResolveLabelPath(imagePath);
+        var labelPath = ResolveLabelPath(image.FilePath);
         if (string.IsNullOrWhiteSpace(labelPath) || !File.Exists(labelPath))
         {
             return new List<GroundTruthBox>();
@@ -906,16 +899,58 @@ public sealed class UltraTabViewModel : ViewModelBase
         return copy;
     }
 
-    private static BitmapImage LoadBitmapImage(string path)
+    private static BitmapImage LoadBitmapImage(TestImageItem image)
     {
-        var image = new BitmapImage();
-        using var stream = File.OpenRead(path);
-        image.BeginInit();
-        image.CacheOption = BitmapCacheOption.OnLoad;
-        image.StreamSource = stream;
-        image.EndInit();
-        image.Freeze();
-        return image;
+        if (image.ImageBytes is { Length: > 0 } bytes)
+        {
+            var bitmapImage = new BitmapImage();
+            using var memoryStream = new MemoryStream(bytes);
+            bitmapImage.BeginInit();
+            bitmapImage.CacheOption = BitmapCacheOption.OnLoad;
+            bitmapImage.StreamSource = memoryStream;
+            bitmapImage.EndInit();
+            bitmapImage.Freeze();
+            return bitmapImage;
+        }
+
+        var bitmapImageFromFile = new BitmapImage();
+        using var stream = File.OpenRead(image.FilePath);
+        bitmapImageFromFile.BeginInit();
+        bitmapImageFromFile.CacheOption = BitmapCacheOption.OnLoad;
+        bitmapImageFromFile.StreamSource = stream;
+        bitmapImageFromFile.EndInit();
+        bitmapImageFromFile.Freeze();
+        return bitmapImageFromFile;
+    }
+
+    private static string GetImageIdentity(TestImageItem image)
+    {
+        return !string.IsNullOrWhiteSpace(image.FilePath)
+            ? image.FilePath
+            : image.FileName;
+    }
+
+    private static byte[]? GetImageBytes(TestImageItem image)
+    {
+        if (image.ImageBytes is { Length: > 0 } bytes)
+        {
+            return bytes;
+        }
+
+        return string.IsNullOrWhiteSpace(image.FilePath) ? null : File.ReadAllBytes(image.FilePath);
+    }
+
+    private static Bitmap CreateBitmap(TestImageItem image)
+    {
+        var bytes = GetImageBytes(image) ?? throw new InvalidOperationException("Immagine non disponibile.");
+        return CreateBitmap(bytes);
+    }
+
+    private static Bitmap CreateBitmap(byte[] imageBytes)
+    {
+        using var stream = new MemoryStream(imageBytes);
+        using var temporaryBitmap = new Bitmap(stream);
+        return new Bitmap(temporaryBitmap);
     }
 
     private static BitmapImage ToBitmapImage(Bitmap bitmap)
@@ -948,24 +983,18 @@ public sealed class UltraTabViewModel : ViewModelBase
         return safeName.Length == 0 ? "default" : safeName;
     }
 
-    private string MoveTestImageToCaptures(string testImagePath)
+    private async Task<PromotedCaptureInfo> PromoteTestImageToCaptureAsync(TestImageItem testImage, byte[] sourceImageBytes)
     {
-        var capturesFolder = _workspaceService.GetCapturesPath(_currentProjectName);
-        Directory.CreateDirectory(capturesFolder);
-
         var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-        var destinationPath = Path.Combine(capturesFolder, $"adb_capture_{timestamp}.png");
-        var counter = 1;
-        while (File.Exists(destinationPath))
+        var fileName = $"adb_capture_{timestamp}.png";
+        await _projectImageBlobService.SaveImageBytesAsync(_currentProjectName, fileName, "capture", sourceImageBytes);
+        await _projectImageBlobService.DeleteImageAsync(_currentProjectName, testImage.FilePath, "test");
+        if (!string.IsNullOrWhiteSpace(testImage.FilePath) && File.Exists(testImage.FilePath))
         {
-            destinationPath = Path.Combine(capturesFolder, $"adb_capture_{timestamp}_{counter}.png");
-            counter++;
+            File.Delete(testImage.FilePath);
         }
 
-        File.Move(testImagePath, destinationPath);
-        _projectImageBlobService.DeleteImageAsync(_currentProjectName, testImagePath).GetAwaiter().GetResult();
-        _projectImageBlobService.SaveImageAsync(_currentProjectName, destinationPath, "capture").GetAwaiter().GetResult();
-        return destinationPath;
+        return new PromotedCaptureInfo(fileName, $"capture|{fileName}");
     }
 
     private string? ResolveLinkedSourceImagePath(string imagePath, string sourceName)
@@ -1001,7 +1030,9 @@ public sealed class UltraTabViewModel : ViewModelBase
     }
 }
 
-public sealed record TestImageItem(string FilePath, string FileName);
+public sealed record TestImageItem(string FilePath, string FileName, byte[]? ImageBytes = null);
+
+internal sealed record PromotedCaptureInfo(string FileName, string ImageKey);
 
 internal sealed record UltraDetectionResult(BitmapImage Preview, string[] Lines, int FinalDetectionCount, IReadOnlyList<YoloDetection> Detections);
 

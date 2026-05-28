@@ -18,6 +18,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
     private readonly AdbService _adbService;
     private readonly ProjectModelBlobService _projectModelBlobService;
+    private readonly ProjectImageBlobService _projectImageBlobService;
     private readonly ProjectWorkspaceService _workspaceService;
     private string _dbStatusText;
     private string _statusText;
@@ -29,6 +30,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
     {
         _adbService = new AdbService();
         _projectModelBlobService = new ProjectModelBlobService();
+        _projectImageBlobService = new ProjectImageBlobService();
         _workspaceService = new ProjectWorkspaceService();
         ProjectNames = new ObservableCollection<string>();
         _dbStatusText = "In attesa di autoconnect PostgreSQL...";
@@ -159,8 +161,6 @@ internal sealed class MainWindowViewModel : ViewModelBase
             }
 
             var selectedDevice = devices[0];
-            var capturesPath = _workspaceService.GetCapturesPath(SelectedProjectName);
-            Directory.CreateDirectory(capturesPath);
             var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
 
             StatusText = $"[{SelectedProjectName}] Lettura immagine da ADB in corso su {selectedDevice}...";
@@ -188,9 +188,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
             }
             else
             {
-                var privaPath = Path.Combine(capturesPath, $"priva_{timestamp}.png");
-                await File.WriteAllBytesAsync(privaPath, pngBytes);
-                StatusText = $"[{SelectedProjectName}] 'cerca' non trovata. Immagine salvata in {privaPath}. Flusso interrotto.";
+                var privaFileName = $"priva_{timestamp}.png";
+                await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, privaFileName, "capture", pngBytes);
+                StatusText = $"[{SelectedProjectName}] 'cerca' non trovata. Immagine salvata nel DB come {privaFileName}. Flusso interrotto.";
                 return;
             }
 
@@ -221,9 +221,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            var errorPath = Path.Combine(capturesPath, $"errore_{timestamp}.png");
-            await File.WriteAllBytesAsync(errorPath, arrowSearchBytes);
-            StatusText = $"[{SelectedProjectName}] 'freccia' non riconosciuta. Immagine salvata in {errorPath}. Flusso interrotto.";
+            var errorFileName = $"errore_{timestamp}.png";
+            await _projectImageBlobService.SaveImageBytesAsync(SelectedProjectName, errorFileName, "capture", arrowSearchBytes);
+            StatusText = $"[{SelectedProjectName}] 'freccia' non riconosciuta. Immagine salvata nel DB come {errorFileName}. Flusso interrotto.";
         }
         catch (Exception ex)
         {

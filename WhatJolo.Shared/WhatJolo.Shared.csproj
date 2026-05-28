@@ -15,9 +15,12 @@
     <Compile Include="..\PostgresConnectionSettings.cs" Link="PostgresConnectionSettings.cs" />
     <Compile Include="..\SharedDatabase.cs" Link="SharedDatabase.cs" />
     <Compile Include="..\ProjectWorkspaceService.cs" Link="ProjectWorkspaceService.cs" />
+    <Compile Include="..\ProjectAssetKey.cs" Link="ProjectAssetKey.cs" />
     <Compile Include="..\AdbService.cs" Link="AdbService.cs" />
+    <Compile Include="..\ProjectImageBlobService.cs" Link="ProjectImageBlobService.cs" />
     <Compile Include="..\ProjectModelBlobService.cs" Link="ProjectModelBlobService.cs" />
     <Compile Include="..\YoloIconDetector.cs" Link="YoloIconDetector.cs" />
+    <Compile Include="AppDebugLog.cs" />
     <Compile Include="SharedAppBootstrap.cs" />
   </ItemGroup>
 </Project>

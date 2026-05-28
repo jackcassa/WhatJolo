@@ -12,6 +12,7 @@ internal sealed class WebcamPreviewWindow : Window
 {
     private const double PreviewWidth = 640;
     private const double PreviewHeight = 480;
+    private readonly TextBox _selectionNameTextBox;
     private readonly Image _previewImage;
     private readonly Ellipse _selectionCircle;
     private readonly Slider _radiusSlider;
@@ -60,6 +61,28 @@ internal sealed class WebcamPreviewWindow : Window
         };
         pathText.SetBinding(TextBlock.TextProperty, new Binding("LastCapturePath"));
         headerStack.Children.Add(pathText);
+
+        var selectionNamePanel = new Grid
+        {
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        selectionNamePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        selectionNamePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        selectionNamePanel.Children.Add(new TextBlock
+        {
+            Text = "Nome selezione",
+            VerticalAlignment = VerticalAlignment.Center,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(255, 212, 0))
+        });
+        _selectionNameTextBox = new TextBox
+        {
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(_selectionNameTextBox, 1);
+        selectionNamePanel.Children.Add(_selectionNameTextBox);
+        headerStack.Children.Add(selectionNamePanel);
         header.Child = headerStack;
         root.Children.Add(header);
 
@@ -187,6 +210,13 @@ internal sealed class WebcamPreviewWindow : Window
     }
 
     public event EventHandler? SaveSelectionRequested;
+    public string SelectionName => _selectionNameTextBox.Text.Trim();
+
+    public void SetSelectionName(string selectionName)
+    {
+        _selectionNameTextBox.Text = selectionName;
+        _selectionNameTextBox.SelectAll();
+    }
 
     public Int32Rect? SelectedPixelRect
     {

@@ -11,6 +11,9 @@ namespace WhatJolo;
 
 internal sealed class AdbPreviewWindow : Window
 {
+    private readonly TextBox _selectionNameTextBox;
+    private readonly Button _previousCaptureButton;
+    private readonly Button _nextCaptureButton;
     private readonly Button _saveSelectionButton;
     private readonly ScrollViewer _scrollViewer;
     private readonly Grid _previewHost;
@@ -71,6 +74,35 @@ internal sealed class AdbPreviewWindow : Window
         DockPanel.SetDock(titleText, Dock.Left);
         headerTop.Children.Add(titleText);
 
+        var navigationPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        DockPanel.SetDock(navigationPanel, Dock.Right);
+
+        _previousCaptureButton = new Button
+        {
+            Content = "Precedente",
+            Margin = new Thickness(0, 0, 8, 0),
+            Padding = new Thickness(12, 6, 12, 6),
+            FontWeight = FontWeights.Bold
+        };
+        _previousCaptureButton.Click += PreviousCaptureButton_Click;
+        _previousCaptureButton.SetBinding(IsEnabledProperty, new Binding("CanMoveToPreviousCapture"));
+        navigationPanel.Children.Add(_previousCaptureButton);
+
+        _nextCaptureButton = new Button
+        {
+            Content = "Successiva",
+            Margin = new Thickness(0, 0, 8, 0),
+            Padding = new Thickness(12, 6, 12, 6),
+            FontWeight = FontWeights.Bold
+        };
+        _nextCaptureButton.Click += NextCaptureButton_Click;
+        _nextCaptureButton.SetBinding(IsEnabledProperty, new Binding("CanMoveToNextCapture"));
+        navigationPanel.Children.Add(_nextCaptureButton);
+
         _saveSelectionButton = new Button
         {
             Content = "Salva selezione",
@@ -80,10 +112,34 @@ internal sealed class AdbPreviewWindow : Window
             HorizontalAlignment = HorizontalAlignment.Right
         };
         _saveSelectionButton.Click += SaveSelectionButton_Click;
-        DockPanel.SetDock(_saveSelectionButton, Dock.Right);
-        headerTop.Children.Add(_saveSelectionButton);
+        navigationPanel.Children.Add(_saveSelectionButton);
+        headerTop.Children.Add(navigationPanel);
 
         headerStack.Children.Add(headerTop);
+
+        var selectionNamePanel = new Grid
+        {
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        selectionNamePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        selectionNamePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        selectionNamePanel.Children.Add(new TextBlock
+        {
+            Text = "Nome selezione",
+            VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new SolidColorBrush(Color.FromRgb(255, 212, 0)),
+            FontWeight = FontWeights.SemiBold
+        });
+
+        _selectionNameTextBox = new TextBox
+        {
+            Margin = new Thickness(12, 0, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        Grid.SetColumn(_selectionNameTextBox, 1);
+        selectionNamePanel.Children.Add(_selectionNameTextBox);
+        headerStack.Children.Add(selectionNamePanel);
 
         var capturePathText = new TextBlock
         {
@@ -199,6 +255,7 @@ internal sealed class AdbPreviewWindow : Window
 
         SizeChanged += AdbPreviewWindow_SizeChanged;
         Loaded += AdbPreviewWindow_Loaded;
+        KeyDown += AdbPreviewWindow_KeyDown;
         MouseWheel += PreviewSurface_PreviewMouseWheel;
         Content = root;
         _lastWindowWidth = Width;
@@ -210,8 +267,15 @@ internal sealed class AdbPreviewWindow : Window
     }
 
     public Int32Rect? SelectedPixelRect => _selectionController.SelectedPixelRect;
+    public string SelectionName => _selectionNameTextBox.Text.Trim();
 
     public event EventHandler? SaveSelectionRequested;
+
+    public void SetSelectionName(string selectionName)
+    {
+        _selectionNameTextBox.Text = selectionName;
+        _selectionNameTextBox.SelectAll();
+    }
 
     public void ClearSelection()
     {
@@ -366,6 +430,61 @@ internal sealed class AdbPreviewWindow : Window
     private void SaveSelectionButton_Click(object sender, RoutedEventArgs e)
     {
         SaveSelectionRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void PreviousCaptureButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AdbCaptureTabViewModel vm)
+        {
+            return;
+        }
+
+        var loaded = await vm.LoadPreviousCaptureAsync();
+        if (loaded)
+        {
+            ClearSelection();
+        }
+    }
+
+    private async void NextCaptureButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not AdbCaptureTabViewModel vm)
+        {
+            return;
+        }
+
+        var loaded = await vm.LoadNextCaptureAsync();
+        if (loaded)
+        {
+            ClearSelection();
+        }
+    }
+
+    private async void AdbPreviewWindow_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete || DataContext is not AdbCaptureTabViewModel vm || vm.SelectedCapturedImage == null)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var confirmation = MessageBox.Show(
+            this,
+            $"Eliminare la capture '{vm.SelectedCapturedImage.FileName}' e le eventuali crop collegate?",
+            "Cancella capture",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var deleted = await vm.DeleteSelectedCaptureAsync();
+        if (deleted)
+        {
+            ClearSelection();
+        }
     }
 
     private void UpdateFitZoom()

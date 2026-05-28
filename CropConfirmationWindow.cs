@@ -7,19 +7,23 @@ namespace WhatJolo;
 
 internal sealed class CropConfirmationWindow : Window
 {
-    public bool IsAccepted { get; private set; }
+    private readonly TextBox _nameTextBox;
 
-    public CropConfirmationWindow(BitmapSource previewImage, string cropClass)
+    public bool IsAccepted { get; private set; }
+    public string EnteredName => _nameTextBox.Text.Trim();
+
+    public CropConfirmationWindow(BitmapSource previewImage, string cropClass, string initialName = "")
     {
         Title = "Conferma acquisizione crop";
         Width = 420;
-        Height = 520;
+        Height = 600;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         ResizeMode = ResizeMode.NoResize;
         Background = (Brush)Application.Current.Resources["AppBackgroundBrush"];
         Foreground = (Brush)Application.Current.Resources["ForegroundPrimaryBrush"];
 
         var root = new Grid { Margin = new Thickness(16) };
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -44,6 +48,24 @@ internal sealed class CropConfirmationWindow : Window
         });
         root.Children.Add(header);
 
+        var namePanel = new StackPanel
+        {
+            Margin = new Thickness(0, 14, 0, 0)
+        };
+        Grid.SetRow(namePanel, 1);
+        namePanel.Children.Add(new TextBlock
+        {
+            Text = "Nome selezione",
+            FontWeight = FontWeights.SemiBold
+        });
+        _nameTextBox = new TextBox
+        {
+            Margin = new Thickness(0, 8, 0, 0),
+            Text = string.IsNullOrWhiteSpace(initialName) ? cropClass : initialName
+        };
+        namePanel.Children.Add(_nameTextBox);
+        root.Children.Add(namePanel);
+
         var previewBorder = new Border
         {
             Margin = new Thickness(0, 16, 0, 16),
@@ -53,7 +75,7 @@ internal sealed class CropConfirmationWindow : Window
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(8)
         };
-        Grid.SetRow(previewBorder, 1);
+        Grid.SetRow(previewBorder, 2);
 
         var previewImageControl = new Image
         {
@@ -76,7 +98,7 @@ internal sealed class CropConfirmationWindow : Window
 
         var noButton = new Button
         {
-            Content = "No",
+            Content = "Annulla",
             MinWidth = 100,
             Margin = new Thickness(0, 0, 8, 0)
         };
@@ -89,7 +111,7 @@ internal sealed class CropConfirmationWindow : Window
 
         var yesButton = new Button
         {
-            Content = "Sì",
+            Content = "Salva",
             MinWidth = 100
         };
         yesButton.Click += (_, _) =>
@@ -99,9 +121,14 @@ internal sealed class CropConfirmationWindow : Window
         };
         buttons.Children.Add(yesButton);
 
-        Grid.SetRow(buttons, 2);
+        Grid.SetRow(buttons, 3);
         root.Children.Add(buttons);
 
         Content = root;
+        Loaded += (_, _) =>
+        {
+            _nameTextBox.Focus();
+            _nameTextBox.SelectAll();
+        };
     }
 }

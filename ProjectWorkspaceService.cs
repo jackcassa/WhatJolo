@@ -288,10 +288,11 @@ public sealed class ProjectWorkspaceService
         using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT ClassName
-            FROM ProjectActiveClass
-            WHERE ProjectName = @ProjectName
-            ORDER BY ClassName;
+            SELECT pac.ClassName
+            FROM ProjectActiveClass pac
+            INNER JOIN ProjectInfo pinfo ON pinfo.Id = pac.ProjectId
+            WHERE pinfo.ProjectName = @ProjectName
+            ORDER BY pac.ClassName;
             """;
         AddParameter(command, "@ProjectName", EnsureProject(projectName));
 
@@ -389,12 +390,13 @@ public sealed class ProjectWorkspaceService
         using var connection = SharedDatabase.CreateConnection();
         connection.Open();
         using var transaction = connection.BeginTransaction();
+        var projectId = GetProjectId(connection, transaction, normalizedProjectName);
 
         using (var deleteCommand = connection.CreateCommand())
         {
             deleteCommand.Transaction = transaction;
-            deleteCommand.CommandText = "DELETE FROM ProjectActiveClass WHERE ProjectName = @ProjectName;";
-            AddParameter(deleteCommand, "@ProjectName", normalizedProjectName);
+            deleteCommand.CommandText = "DELETE FROM ProjectActiveClass WHERE ProjectId = @ProjectId;";
+            AddParameter(deleteCommand, "@ProjectId", projectId);
             deleteCommand.ExecuteNonQuery();
         }
 
@@ -406,20 +408,20 @@ public sealed class ProjectWorkspaceService
                 """
                 INSERT INTO ProjectActiveClass
                 (
-                    ProjectName,
+                    ProjectId,
                     ClassName,
                     CreatedAtUtc,
                     UpdatedAtUtc
                 )
                 VALUES
                 (
-                    @ProjectName,
+                    @ProjectId,
                     @ClassName,
                     CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP
                 );
                 """;
-            AddParameter(insertCommand, "@ProjectName", normalizedProjectName);
+            AddParameter(insertCommand, "@ProjectId", projectId);
             AddParameter(insertCommand, "@ClassName", className);
             insertCommand.ExecuteNonQuery();
         }
@@ -502,6 +504,27 @@ public sealed class ProjectWorkspaceService
         AddParameter(command, "@MachineName", Environment.MachineName);
         AddParameter(command, "@CurrentCropClass", "cerca");
         command.ExecuteNonQuery();
+    }
+
+    private static long GetProjectId(DbConnection connection, DbTransaction transaction, string projectName)
+    {
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            SELECT Id
+            FROM ProjectInfo
+            WHERE ProjectName = @ProjectName
+            LIMIT 1;
+            """;
+        AddParameter(command, "@ProjectName", projectName);
+        var result = command.ExecuteScalar();
+        if (result == null || result == DBNull.Value)
+        {
+            throw new InvalidOperationException($"ProjectInfo non trovato per il progetto '{projectName}'.");
+        }
+
+        return Convert.ToInt64(result);
     }
 
     private static void AddParameter(DbCommand command, string name, object value)

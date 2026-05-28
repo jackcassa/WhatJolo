@@ -2,7 +2,7 @@ using System.IO;
 
 namespace WhatJolo;
 
-internal static class ProjectAssetKey
+public static class ProjectAssetKey
 {
     public static bool IsLogicalKey(string? value)
     {

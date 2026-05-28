@@ -164,16 +164,26 @@ public static class SharedDatabase
     {
         if (!IsPostgresConfigured())
         {
+            AppDebugLog.Warn("DB/Shared", "EnsureDatabaseReady chiamato senza configurazione PostgreSQL attiva.");
             return;
         }
 
         progress?.Invoke("Verifica connessione PostgreSQL...");
-        using var connection = new NpgsqlConnection(GetPostgresConnectionString());
-        connection.Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1;";
-        command.ExecuteScalar();
-        progress?.Invoke("Connessione PostgreSQL verificata.");
+        try
+        {
+            using var connection = new NpgsqlConnection(GetPostgresConnectionString());
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1;";
+            command.ExecuteScalar();
+            progress?.Invoke("Connessione PostgreSQL verificata.");
+            AppDebugLog.Info("DB/Shared", "Connessione PostgreSQL verificata con successo.");
+        }
+        catch (Exception ex)
+        {
+            AppDebugLog.Error("DB/Shared", "Errore durante EnsureDatabaseReady.", ex);
+            throw;
+        }
     }
 
     private static string GetPostgresConnectionString()

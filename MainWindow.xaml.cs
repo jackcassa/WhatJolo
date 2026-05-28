@@ -10,12 +10,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using Microsoft.Win32;
 using Npgsql;
 
 namespace WhatJolo;
 
 public partial class MainWindow : System.Windows.Window
 {
+    private const string AdbUiDebugScope = "ADB/UI";
     private readonly MainWindowViewModel _viewModel;
     private AdbPreviewWindow? _adbPreviewWindow;
     private WebcamPreviewWindow? _webcamPreviewWindow;
@@ -53,27 +55,10 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
-        var preview = _viewModel.AdbCaptureTab.CreateSelectionPreview(selectedRect.Value);
-        if (preview == null)
-        {
-            _viewModel.AdbCaptureTab.SetStatusMessage("Impossibile creare l'anteprima della selezione.");
-            return;
-        }
-
-        var confirmationWindow = new CropConfirmationWindow(preview, _viewModel.SelectedCropClass)
-        {
-            Owner = this
-        };
-
-        confirmationWindow.Show();
-        var accepted = await WaitForWindowCloseAsync(confirmationWindow, () => confirmationWindow.IsAccepted);
-        if (!accepted)
-        {
-            _viewModel.AdbCaptureTab.SetStatusMessage("Salvataggio crop annullato.");
-            return;
-        }
-
-        var savedItem = await _viewModel.AdbCaptureTab.SaveSelectionAsync(selectedRect.Value, _viewModel.SelectedCropClass);
+        var savedItem = await _viewModel.AdbCaptureTab.SaveSelectionAsync(
+            selectedRect.Value,
+            _viewModel.SelectedCropClass,
+            _adbPreviewWindow?.SelectionName);
         if (savedItem == null)
         {
             return;
@@ -89,15 +74,31 @@ public partial class MainWindow : System.Windows.Window
 
     private async void GenerateVariations_Click(object sender, RoutedEventArgs e)
     {
-        if (_viewModel.AdbCaptureTab.SelectedSavedCrop == null && _viewModel.AdbCaptureTab.SelectedVariationCrop == null)
+        if (_viewModel.AdbCaptureTab.SelectedSavedCrop == null)
         {
             _viewModel.AdbCaptureTab.SetStatusMessage("Seleziona prima una crop per generare le variazioni.");
             return;
         }
 
+        var prompt = new NumberPromptWindow(
+            "Numero variazioni",
+            "Quante variazioni vuoi generare per la crop selezionata?",
+            10,
+            1,
+            200,
+            "Genera")
+        {
+            Owner = this
+        };
+
+        if (prompt.ShowDialog() != true)
+        {
+            return;
+        }
+
         try
         {
-            var generatedCount = await _viewModel.AdbCaptureTab.GenerateVariationsAsync(_viewModel.SelectedCropClass, 10);
+            var generatedCount = await _viewModel.AdbCaptureTab.GenerateVariationsAsync(_viewModel.SelectedCropClass, prompt.Value);
             if (generatedCount <= 0)
             {
                 return;
@@ -128,12 +129,28 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        var prompt = new NumberPromptWindow(
+            "Numero variazioni",
+            "Quante variazioni vuoi generare per ogni crop selezionata?",
+            10,
+            1,
+            200,
+            "Genera")
+        {
+            Owner = this
+        };
+
+        if (prompt.ShowDialog() != true)
+        {
+            return;
+        }
+
         try
         {
             var generatedCount = await _viewModel.AdbCaptureTab.GenerateVariationsForCropPathsAsync(
                 _viewModel.SelectedCropClass,
-                selectedItems.Select(item => item.FilePath),
-                10);
+                selectedItems.Select(item => item.ImageKey),
+                prompt.Value);
 
             if (generatedCount <= 0)
             {
@@ -153,11 +170,58 @@ public partial class MainWindow : System.Windows.Window
         }
     }
 
+    private async void DeleteAllVariations_Click(object sender, RoutedEventArgs e)
+    {
+        var variationCount = _viewModel.AdbCaptureTab.VariationCrops.Count;
+        if (variationCount == 0)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage("Nessuna variazione da eliminare per la classe selezionata.");
+            return;
+        }
+
+        var selectedCropName = _viewModel.AdbCaptureTab.SelectedSavedCrop?.FileName ?? "crop selezionata";
+
+        var confirmation = MessageBox.Show(
+            this,
+            $"Eliminare tutte le {variationCount} variazioni collegate a '{selectedCropName}' nel progetto '{_viewModel.SelectedProjectName}'?",
+            "Cancella variazioni",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            var deletedCount = await _viewModel.AdbCaptureTab.DeleteAllVariationCropsAsync(_viewModel.SelectedCropClass);
+            if (deletedCount <= 0)
+            {
+                return;
+            }
+
+            MessageBox.Show(
+                this,
+                $"Variazioni eliminate: {deletedCount}",
+                "Cancella variazioni",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage($"[{_viewModel.SelectedProjectName}] Errore eliminazione variazioni: {ex.Message}");
+        }
+    }
+
     private async void CaptureAdbScreenshot_Click(object sender, System.Windows.RoutedEventArgs e)
     {
-        await _viewModel.AdbCaptureTab.CaptureAdbScreenshotAsync();
-        EnsureAdbPreviewWindow();
-        _adbPreviewWindow?.ClearSelection();
+        await _viewModel.AdbCaptureTab.CaptureAdbScreenshotAsync(_viewModel.SelectedCropClass);
+        if (_viewModel.AdbCaptureTab.LatestScreenshotPreview != null)
+        {
+            EnsureAdbPreviewWindow();
+            _adbPreviewWindow?.ClearSelection();
+        }
     }
 
     private async void CaptureWebcamFrame_Click(object sender, RoutedEventArgs e)
@@ -168,7 +232,8 @@ public partial class MainWindow : System.Windows.Window
             await _viewModel.AdbCaptureTab.ImportCapturePngAsync(
                 capture.PngBytes,
                 $"Webcam {capture.CameraIndex}",
-                $"webcam_{capture.CameraIndex}");
+                $"webcam_{capture.CameraIndex}",
+                _viewModel.SelectedCropClass);
             EnsureWebcamPreviewWindow();
             _webcamPreviewWindow?.ResetSelection();
         }
@@ -190,7 +255,10 @@ public partial class MainWindow : System.Windows.Window
 
         try
         {
-            var savedItem = await _viewModel.AdbCaptureTab.SaveSelectionAsync(selectedRect.Value, _viewModel.SelectedCropClass);
+            var savedItem = await _viewModel.AdbCaptureTab.SaveSelectionAsync(
+                selectedRect.Value,
+                _viewModel.SelectedCropClass,
+                _webcamPreviewWindow?.SelectionName);
             if (savedItem != null)
             {
                 _viewModel.WebcamTab.SetStatusMessage($"Selezione webcam salvata: {savedItem.FileName}");
@@ -415,20 +483,92 @@ public partial class MainWindow : System.Windows.Window
             return;
         }
 
+        AppDebugLog.Info(AdbUiDebugScope,
+            $"CropClassComboBox_SelectionChanged START | project={_viewModel.SelectedProjectName} | class={_viewModel.SelectedCropClass}");
+
         _viewModel.SaveSelectedCropClassForCurrentProject();
+        _viewModel.AdbCaptureTab.SetCurrentCropClass(_viewModel.SelectedCropClass);
+        await _viewModel.AdbCaptureTab.LoadCapturedImagesAsync();
+        if (_viewModel.AdbCaptureTab.SelectedCapturedImage == null && _viewModel.AdbCaptureTab.CapturedImages.Count > 0)
+        {
+            _viewModel.AdbCaptureTab.SelectedCapturedImage = _viewModel.AdbCaptureTab.CapturedImages[0];
+        }
+
+        if (_viewModel.AdbCaptureTab.SelectedCapturedImage != null)
+        {
+            await _viewModel.AdbCaptureTab.LoadSelectedCaptureAsync(_viewModel.SelectedCropClass);
+            AppDebugLog.Info(AdbUiDebugScope,
+                $"CropClassComboBox_SelectionChanged END | capture={_viewModel.AdbCaptureTab.SelectedCapturedImage?.ImageKey ?? "<null>"} | saved={_viewModel.AdbCaptureTab.SavedCrops.Count} | variations={_viewModel.AdbCaptureTab.VariationCrops.Count}");
+            return;
+        }
+
         await _viewModel.AdbCaptureTab.LoadSavedCropsAsync(_viewModel.SelectedCropClass);
+        AppDebugLog.Info(AdbUiDebugScope,
+            $"CropClassComboBox_SelectionChanged END(no capture) | saved={_viewModel.AdbCaptureTab.SavedCrops.Count} | variations={_viewModel.AdbCaptureTab.VariationCrops.Count}");
     }
 
     private async void CapturedImages_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        AppDebugLog.Debug(AdbUiDebugScope,
+            $"CapturedImages_SelectionChanged | loadingCaptured={_viewModel?.AdbCaptureTab?.IsLoadingCapturedImages} | selected={_viewModel?.AdbCaptureTab?.SelectedCapturedImage?.ImageKey ?? "<null>"}");
         if (_viewModel?.AdbCaptureTab == null ||
             _viewModel.AdbCaptureTab.IsLoadingCapturedImages ||
             _viewModel.AdbCaptureTab.SelectedCapturedImage == null)
         {
+            AppDebugLog.Debug(AdbUiDebugScope, "CapturedImages_SelectionChanged skipped.");
             return;
         }
 
-        var loaded = await _viewModel.AdbCaptureTab.LoadSelectedCaptureAsync();
+        var loaded = await _viewModel.AdbCaptureTab.LoadSelectedCaptureAsync(_viewModel.SelectedCropClass);
+        if (!loaded)
+        {
+            AppDebugLog.Warn(AdbUiDebugScope, "CapturedImages_SelectionChanged load returned false.");
+            return;
+        }
+
+        _viewModel.AdbCaptureTab.SetPreviewFromCapturedImageSelection();
+        AppDebugLog.Debug(AdbUiDebugScope,
+            $"CapturedImages_SelectionChanged applied preview | selected={_viewModel.AdbCaptureTab.SelectedCapturedImage?.ImageKey ?? "<null>"}");
+    }
+
+    private async void ImportCaptureFromFile_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Seleziona immagine da importare",
+            Filter = "Immagini|*.png;*.jpg;*.jpeg;*.bmp;*.webp|Tutti i file|*.*",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var imageBytes = await File.ReadAllBytesAsync(dialog.FileName);
+            await _viewModel.AdbCaptureTab.ImportCaptureFileAsync(
+                imageBytes,
+                "Import file system",
+                Path.GetFileName(dialog.FileName),
+                _viewModel.SelectedCropClass);
+        }
+        catch (Exception ex)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage("Errore import immagine da file: " + ex.Message);
+        }
+    }
+
+    private async void CapturedImages_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (_viewModel?.AdbCaptureTab.SelectedCapturedImage == null)
+        {
+            return;
+        }
+
+        var loaded = await _viewModel.AdbCaptureTab.LoadSelectedCaptureAsync(_viewModel.SelectedCropClass);
         if (!loaded)
         {
             return;
@@ -436,6 +576,36 @@ public partial class MainWindow : System.Windows.Window
 
         EnsureAdbPreviewWindow();
         _adbPreviewWindow?.ClearSelection();
+    }
+
+    private async void CapturedImagesList_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var selectedCapture = _viewModel?.AdbCaptureTab.SelectedCapturedImage;
+        if (selectedCapture == null)
+        {
+            _viewModel?.AdbCaptureTab.SetStatusMessage("Nessuna immagine acquisita selezionata da eliminare.");
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            $"Eliminare l'immagine acquisita selezionata?{Environment.NewLine}{selectedCapture.FileName}",
+            "Cancella immagine acquisita",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        await _viewModel!.AdbCaptureTab.DeleteSelectedCaptureAsync(_viewModel.SelectedCropClass);
     }
 
     private async void CreateProject_Click(object sender, RoutedEventArgs e)
@@ -492,19 +662,20 @@ public partial class MainWindow : System.Windows.Window
 
     private async void SavedCropsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_viewModel?.AdbCaptureTab.SelectedSavedCrop == null)
+        AppDebugLog.Debug(AdbUiDebugScope,
+            $"SavedCropsList_SelectionChanged | loadingSaved={_viewModel?.AdbCaptureTab?.IsLoadingSavedCrops} | selected={_viewModel?.AdbCaptureTab?.SelectedSavedCrop?.ImageKey ?? "<null>"}");
+        if (_viewModel?.AdbCaptureTab == null ||
+            _viewModel.AdbCaptureTab.IsLoadingSavedCrops ||
+            _viewModel.AdbCaptureTab.SelectedSavedCrop == null)
         {
+            AppDebugLog.Debug(AdbUiDebugScope, "SavedCropsList_SelectionChanged skipped.");
             return;
         }
 
-        var loaded = await _viewModel.AdbCaptureTab.LoadSourceImageForCropAsync(_viewModel.AdbCaptureTab.SelectedSavedCrop);
-        if (!loaded)
-        {
-            return;
-        }
-
-        EnsureAdbPreviewWindow();
-        _adbPreviewWindow?.ClearSelection();
+        _viewModel.AdbCaptureTab.SetPreviewFromSavedCropSelection();
+        await _viewModel.AdbCaptureTab.LoadVariationsForSelectedCropAsync();
+        AppDebugLog.Debug(AdbUiDebugScope,
+            $"SavedCropsList_SelectionChanged END | variations={_viewModel.AdbCaptureTab.VariationCrops.Count}");
     }
 
     private async void VariationCropsList_KeyDown(object sender, KeyEventArgs e)
@@ -515,24 +686,42 @@ public partial class MainWindow : System.Windows.Window
         }
 
         e.Handled = true;
+        var selectedVariation = _viewModel.AdbCaptureTab.SelectedVariationCrop;
+        if (selectedVariation == null)
+        {
+            _viewModel.AdbCaptureTab.SetStatusMessage("Nessuna variazione selezionata da eliminare.");
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            $"Eliminare la variazione selezionata?{Environment.NewLine}{selectedVariation.FileName}",
+            "Cancella variazione",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         await _viewModel.AdbCaptureTab.DeleteSelectedVariationCropAsync(_viewModel.SelectedCropClass);
     }
 
     private async void VariationCropsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_viewModel?.AdbCaptureTab.SelectedVariationCrop == null)
+        AppDebugLog.Debug(AdbUiDebugScope,
+            $"VariationCropsList_SelectionChanged | loadingVariation={_viewModel?.AdbCaptureTab?.IsLoadingVariationCrops} | selected={_viewModel?.AdbCaptureTab?.SelectedVariationCrop?.ImageKey ?? "<null>"}");
+        if (_viewModel?.AdbCaptureTab == null ||
+            _viewModel.AdbCaptureTab.IsLoadingVariationCrops ||
+            _viewModel.AdbCaptureTab.SelectedVariationCrop == null)
         {
+            AppDebugLog.Debug(AdbUiDebugScope, "VariationCropsList_SelectionChanged skipped.");
             return;
         }
 
-        var loaded = await _viewModel.AdbCaptureTab.LoadSourceImageForCropAsync(_viewModel.AdbCaptureTab.SelectedVariationCrop);
-        if (!loaded)
-        {
-            return;
-        }
-
-        EnsureAdbPreviewWindow();
-        _adbPreviewWindow?.ClearSelection();
+        _viewModel.AdbCaptureTab.SetPreviewFromVariationSelection();
+        AppDebugLog.Debug(AdbUiDebugScope, "VariationCropsList_SelectionChanged applied preview.");
     }
 
     private async void UltraTestImages_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -776,6 +965,7 @@ public partial class MainWindow : System.Windows.Window
                 }
                 _adbPreviewWindow = null;
             };
+            _adbPreviewWindow.SetSelectionName(GetDefaultSelectionName());
             _adbPreviewWindow.Show();
             return;
         }
@@ -784,6 +974,8 @@ public partial class MainWindow : System.Windows.Window
         {
             _adbPreviewWindow.Show();
         }
+
+        _adbPreviewWindow.SetSelectionName(GetDefaultSelectionName());
     }
 
     private void EnsureWebcamPreviewWindow()
@@ -807,6 +999,7 @@ public partial class MainWindow : System.Windows.Window
 
                 _webcamPreviewWindow = null;
             };
+            _webcamPreviewWindow.SetSelectionName(GetDefaultSelectionName());
             _webcamPreviewWindow.Show();
             return;
         }
@@ -816,7 +1009,34 @@ public partial class MainWindow : System.Windows.Window
             _webcamPreviewWindow.Show();
         }
 
+        _webcamPreviewWindow.SetSelectionName(GetDefaultSelectionName());
         _webcamPreviewWindow.Activate();
+    }
+
+    private string GetDefaultSelectionName()
+    {
+        var selectedCaptureName = _viewModel.AdbCaptureTab.SelectedCapturedImage?.FileName;
+        if (!string.IsNullOrWhiteSpace(selectedCaptureName))
+        {
+            var stem = Path.GetFileNameWithoutExtension(selectedCaptureName);
+            if (!string.IsNullOrWhiteSpace(stem))
+            {
+                return stem;
+            }
+        }
+
+        var lastCapturePath = _viewModel.AdbCaptureTab.LastCapturePath;
+        if (!string.IsNullOrWhiteSpace(lastCapturePath) &&
+            !string.Equals(lastCapturePath, "Nessuna cattura eseguita.", StringComparison.OrdinalIgnoreCase))
+        {
+            var stem = Path.GetFileNameWithoutExtension(lastCapturePath);
+            if (!string.IsNullOrWhiteSpace(stem))
+            {
+                return stem;
+            }
+        }
+
+        return _viewModel.SelectedCropClass;
     }
 
     private void CloseAdbPreviewWindow()
@@ -1324,8 +1544,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        var imageCount = await _projectImageBlobService.SyncProjectAsync(SelectedProjectName);
-        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Blob immagini allineati: {imageCount}";
+        await Task.CompletedTask;
+        StatusText = $"Tabelle lette: {Tables.Count} | Progetto corrente: {SelectedProjectName} | Classi: {ActiveProjectClassesSummary} | Allineamento blob non necessario nel flusso DB-first.";
     }
 
     public string GetCurrentProjectPath()
@@ -1476,10 +1696,11 @@ public sealed class MainWindowViewModel : ViewModelBase
             case "ProjectActiveClass":
                 command.CommandText =
                     """
-                    SELECT Id, ProjectName, ClassName, CreatedAtUtc, UpdatedAtUtc
-                    FROM ProjectActiveClass
-                    WHERE ProjectName = @ProjectName
-                    ORDER BY ClassName;
+                    SELECT pac.Id, pinfo.ProjectName, pac.ClassName, pac.CreatedAtUtc, pac.UpdatedAtUtc
+                    FROM ProjectActiveClass pac
+                    INNER JOIN ProjectInfo pinfo ON pinfo.Id = pac.ProjectId
+                    WHERE pinfo.ProjectName = @ProjectName
+                    ORDER BY pac.ClassName;
                     """;
                 AddParameter(command, "@ProjectName", SelectedProjectName);
                 filterMode = $"filtrato per progetto '{SelectedProjectName}'";
@@ -1497,20 +1718,43 @@ public sealed class MainWindowViewModel : ViewModelBase
                 filterMode = $"filtrato per progetto '{SelectedProjectName}'";
                 break;
 
-            case "ProjectImageBlob":
-            case "projectimageblob":
+            case "ProjectImage":
+            case "projectimage":
                 command.CommandText = SharedDatabase.IsPostgresConfigured()
                     ? """
-                      SELECT Id, ProjectName, ImageKey, ImageKind, ContentHash, ByteLength, octet_length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
-                      FROM ProjectImageBlob
-                      WHERE ProjectName = @ProjectName
-                      ORDER BY UpdatedAtUtc DESC, Id DESC;
+                      SELECT pi.Id, pinfo.ProjectName, pi.ImageKey, pi.ContentHash, pi.ByteLength, octet_length(pi.CompressedBytes) AS CompressedLength, pi.CreatedAtUtc, pi.UpdatedAtUtc
+                      FROM ProjectImage pi
+                      INNER JOIN ProjectInfo pinfo ON pinfo.Id = pi.ProjectId
+                      WHERE pinfo.ProjectName = @ProjectName
+                      ORDER BY pi.UpdatedAtUtc DESC, pi.Id DESC;
                       """
                     : """
-                      SELECT Id, ProjectName, ImageKey, ImageKind, ContentHash, ByteLength, length(CompressedBytes) AS CompressedLength, CreatedAtUtc, UpdatedAtUtc
-                      FROM ProjectImageBlob
-                      WHERE ProjectName = @ProjectName
-                      ORDER BY UpdatedAtUtc DESC, Id DESC;
+                      SELECT pi.Id, pinfo.ProjectName, pi.ImageKey, pi.ContentHash, pi.ByteLength, length(pi.CompressedBytes) AS CompressedLength, pi.CreatedAtUtc, pi.UpdatedAtUtc
+                      FROM ProjectImage pi
+                      INNER JOIN ProjectInfo pinfo ON pinfo.Id = pi.ProjectId
+                      WHERE pinfo.ProjectName = @ProjectName
+                      ORDER BY pi.UpdatedAtUtc DESC, pi.Id DESC;
+                      """;
+                AddParameter(command, "@ProjectName", SelectedProjectName);
+                filterMode = $"filtrato per progetto '{SelectedProjectName}'";
+                break;
+
+            case "ProjectVariation":
+            case "projectvariation":
+                command.CommandText = SharedDatabase.IsPostgresConfigured()
+                    ? """
+                      SELECT pv.Id, pinfo.ProjectName, pv.LabelName, pv.SourceImageKey, pv.CropImageKey, pv.OriginalCropAssetId, pv.SourceByteLength, octet_length(pv.SourceCompressedBytes) AS SourceCompressedLength, pv.CropByteLength, octet_length(pv.CropCompressedBytes) AS CropCompressedLength, pv.CreatedAtUtc, pv.UpdatedAtUtc
+                      FROM ProjectVariation pv
+                      INNER JOIN ProjectInfo pinfo ON pinfo.Id = pv.ProjectId
+                      WHERE pinfo.ProjectName = @ProjectName
+                      ORDER BY pv.UpdatedAtUtc DESC, pv.Id DESC;
+                      """
+                    : """
+                      SELECT pv.Id, pinfo.ProjectName, pv.LabelName, pv.SourceImageKey, pv.CropImageKey, pv.OriginalCropAssetId, pv.SourceByteLength, length(pv.SourceCompressedBytes) AS SourceCompressedLength, pv.CropByteLength, length(pv.CropCompressedBytes) AS CropCompressedLength, pv.CreatedAtUtc, pv.UpdatedAtUtc
+                      FROM ProjectVariation pv
+                      INNER JOIN ProjectInfo pinfo ON pinfo.Id = pv.ProjectId
+                      WHERE pinfo.ProjectName = @ProjectName
+                      ORDER BY pv.UpdatedAtUtc DESC, pv.Id DESC;
                       """;
                 AddParameter(command, "@ProjectName", SelectedProjectName);
                 filterMode = $"filtrato per progetto '{SelectedProjectName}'";
@@ -1628,9 +1872,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                     await using var command = connection.CreateCommand();
                     command.CommandText =
                         """
-                        DELETE FROM ProjectActiveClass
-                        WHERE ProjectName = @ProjectName
-                          AND ClassName = @ClassName;
+                        DELETE FROM ProjectActiveClass pac
+                        USING ProjectInfo pinfo
+                        WHERE pac.ProjectId = pinfo.Id
+                          AND pinfo.ProjectName = @ProjectName
+                          AND pac.ClassName = @ClassName;
                         """;
                     AddParameter(command, "@ProjectName", projectName);
                     AddParameter(command, "@ClassName", className);
@@ -1655,14 +1901,17 @@ public sealed class MainWindowViewModel : ViewModelBase
                     break;
                 }
 
-                case "ProjectImageBlob":
-                case "projectimageblob":
+                case "ProjectImage":
+                case "projectimage":
+                case "ProjectVariation":
+                case "projectvariation":
                 case "ProjectModelBlob":
                 case "projectmodelblob":
                 {
-                    var tableName = SelectedDatabaseTable.Equals("ProjectModelBlob", StringComparison.OrdinalIgnoreCase)
-                        ? "ProjectModelBlob"
-                        : "ProjectImageBlob";
+                    var tableName =
+                        SelectedDatabaseTable.Equals("ProjectModelBlob", StringComparison.OrdinalIgnoreCase) ? "ProjectModelBlob" :
+                        SelectedDatabaseTable.Equals("ProjectVariation", StringComparison.OrdinalIgnoreCase) ? "ProjectVariation" :
+                        "ProjectImage";
                     var idText = GetRowValue(rowView, "Id");
                     if (!long.TryParse(idText, out var id))
                     {
@@ -1744,6 +1993,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         try
         {
+            AppDebugLog.Info("DB/Test", $"Test connessione richiesto verso {DbInstanceHost.Trim()}:{DbInstancePort}/{DbInstanceDatabase.Trim()}.");
             var builder = new NpgsqlConnectionStringBuilder
             {
                 Host = DbInstanceHost.Trim(),
@@ -1759,47 +2009,64 @@ public sealed class MainWindowViewModel : ViewModelBase
             command.CommandText = "SELECT version();";
             var version = Convert.ToString(await command.ExecuteScalarAsync()) ?? "Connessione OK";
             DbInstanceStatus = $"Connessione OK | {version}";
+            AppDebugLog.Info("DB/Test", $"Test connessione riuscito verso {builder.Host}:{builder.Port}/{builder.Database}.");
         }
         catch (Exception ex)
         {
             DbInstanceStatus = $"Test connessione fallito: {ex.Message}";
+            AppDebugLog.Error("DB/Test", "Test connessione fallito.", ex);
         }
     }
 
     public async Task ConnectDatabaseInstanceAsync()
     {
+        AppDebugLog.Info("DB/Connect", $"Richiesta connessione verso {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.");
+
+        DbInstanceStatus = "Salvataggio configurazione PostgreSQL...";
+        await Task.Yield();
+        SaveDatabaseInstanceSettings();
+
         try
         {
-            DbInstanceStatus = "Salvataggio configurazione PostgreSQL...";
-            await Task.Yield();
-            SaveDatabaseInstanceSettings();
-
-            DbInstanceStatus = $"Attivazione connessione PostgreSQL verso {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}...";
+            DbInstanceStatus = $"Fase 1/2 - Connessione PostgreSQL verso {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}...";
             await Task.Yield();
             SharedDatabase.ActivateConfiguredPostgres();
+            AppDebugLog.Info("DB/Connect", "Fase 1/2 avviata: verifica connessione e lettura tabelle.");
 
-            DbInstanceStatus = "Verifica connessione PostgreSQL in corso...";
-            await Task.Yield();
             await ReloadDatabaseConnectionAsync();
-
             IsDatabaseConnected = true;
+            AppDebugLog.Info("DB/Connect", "Fase 1/2 completata: connessione PostgreSQL riuscita.");
+        }
+        catch (Exception ex)
+        {
+            SharedDatabase.DeactivatePostgres();
+            IsDatabaseConnected = false;
+            DbInstanceStatus = $"Fase 1/2 fallita - Connessione PostgreSQL: {ex.Message}";
+            AppDebugLog.Error("DB/Connect", "Fase 1/2 fallita: errore di connessione PostgreSQL.", ex);
+            return;
+        }
+
+        try
+        {
+            DbInstanceStatus = "Fase 2/2 - Bootstrap progetto e tab applicative...";
+            await Task.Yield();
+            AppDebugLog.Info("DB/Bootstrap", "Fase 2/2 avviata: refresh progetti e applicazione progetto corrente.");
+
             RefreshProjects();
             if (ProjectNames.Count > 0 && !ProjectNames.Contains(SelectedProjectName))
             {
                 SelectedProjectName = ProjectNames.First();
             }
 
-            DbInstanceStatus = $"Connessione riuscita. Applicazione progetto {SelectedProjectName}...";
-            await Task.Yield();
             await ApplySelectedProjectAsync();
 
             DbInstanceStatus = $"Connesso a PostgreSQL su {DbInstanceHost}:{DbInstancePort}/{DbInstanceDatabase}.";
+            AppDebugLog.Info("DB/Bootstrap", $"Fase 2/2 completata: progetto attivo '{SelectedProjectName}'.");
         }
         catch (Exception ex)
         {
-            SharedDatabase.DeactivatePostgres();
-            IsDatabaseConnected = false;
-            DbInstanceStatus = $"Connessione PostgreSQL fallita: {ex.Message}";
+            DbInstanceStatus = $"Fase 2/2 fallita - Bootstrap applicativo: {ex.Message}";
+            AppDebugLog.Error("DB/Bootstrap", "Fase 2/2 fallita: errore nel bootstrap del progetto o delle tab.", ex);
         }
     }
 
@@ -1808,7 +2075,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         DbInstanceStatus = "Preparazione connessione PostgreSQL...";
         await Task.Yield();
 
-        IProgress<string> progress = new Progress<string>(message => DbInstanceStatus = message);
+        IProgress<string> progress = new Progress<string>(message =>
+        {
+            DbInstanceStatus = message;
+            AppDebugLog.Debug("DB/Reload", message);
+        });
         var tableNames = await Task.Run(() =>
         {
             progress.Report("Reset stato connessione PostgreSQL...");
