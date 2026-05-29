@@ -1,83 +1,98 @@
-# Workflow Navigation / Send2 / Send3
+# Workflow Navigation / Send2 / Send3 / Send4 / Send5 / Send6
 
-## Send2
+## 1) Filtri contatti per bottone
 
-1. Avvia loop continuo `Send2`.
-2. Verifica progetto selezionato.
-3. Legge dal DB tutti i contatti con:
-   - `telefono` valorizzato
-   - `exclude = 0`
-   - `migration = true`
-   - `sent = 0`
-4. Per ogni contatto del ciclo corrente legge il campo `telefono`.
-5. Verifica ADB.
-6. Ricostruisce struttura locale di inferenza dal DB.
-7. Ripristina modelli ONNX per:
-   - `cerca`
-   - `chat`
-   - `back`
-8. Avvia ADB.
-9. Seleziona il primo device collegato.
-10. Acquisisce screenshot.
-11. Esegue YOLO per cercare `cerca`.
-12. Se trova `cerca`:
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - fa tap al centro del box
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - aspetta cambio schermata
-13. Se non trova `cerca`:
-    - salva immagine su file system come `priva_<timestamp>.png`
-    - interrompe il ciclo corrente
-14. Invia con ADB il valore `telefono` del contatto corrente.
-15. Aspetta 1 secondo più un extra casuale da 0 a 1 secondo.
-16. Aspetta il cambio di schermata.
-17. Esegue YOLO per cercare `chat`.
-18. Se trova `chat`:
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - fa tap al centro del box
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - aspetta cambio schermata
-19. Se non trova `chat`:
-    - salva immagine su file system come `priva_<timestamp>_chat.png`
-    - interrompe il ciclo corrente
-20. Esegue YOLO per cercare `back`.
-21. Se trova `back`:
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - fa tap al centro del box
-    - aspetta 1 secondo più un extra casuale da 0 a 1 secondo
-    - aspetta nuova immagine
-    - aggiorna preview
-22. Se non trova `back`:
-    - salva immagine su file system come `errore_<timestamp>_back.png`
-    - interrompe il ciclo corrente
-23. Se il workflow del contatto termina con successo:
-    - aggiorna il contatto mettendo `sent = 1`
-24. Scrive log YOLO in `navigation_yolo.log`.
-25. Passa al contatto successivo.
-26. Aspetta 1 secondo più un extra casuale da 0 a 1 secondo dopo ogni contatto completato con successo.
-27. Quando finisce tutti i contatti, riparte dall'inizio della lista.
-28. Il pulsante `Stop` ferma il loop.
+- `Send2` (`Invio migration`)
+  - `telefono` non vuoto
+  - `migration = true`
+  - `sent = 0`
+  - `exclude = 0`
+- `Send3` (`Invio agenda`)
+  - `telefono` non vuoto
+  - `agenda = true`
+  - `sent = 0`
+  - `exclude = 0`
+- `Send4` (`Invio tutti`)
+  - `telefono` non vuoto
+  - `sent = 0`
+  - `exclude = 0`
+- `Send5` (`Invio solo agenda`)
+  - `telefono` non vuoto
+  - `agenda = true`
+  - `migration = false`
+  - `sent = 0`
+  - `exclude = 0`
+- `Send6` (`Invio OCR nomi`)
+  - `telefono` non vuoto
+  - `contactname` vuoto
+  - `sent = 0`
+  - `exclude = 0`
 
-## Send3
+Tutti i workflow contatti sono ordinati per `Id`.
 
-1. Avvia loop continuo `Send3`.
-2. Il workflow operativo è identico a `Send2`.
-3. Cambia solo il filtro iniziale sui contatti:
-   - `telefono` valorizzato
-   - `exclude = 0`
-   - `agenda = true`
-   - `sent = 0`
-4. Anche per `Send3`, ad ogni successo:
-   - aggiorna il contatto mettendo `sent = 1`
+## 2) Flusso operativo comune
 
-## Send4
+1. Avvio loop workflow.
+2. Ricostruzione struttura inferenza locale dal DB.
+3. Verifica modelli `best.onnx` per `cerca`, `chat`, `back`.
+4. Avvio ADB e selezione primo device.
+5. Acquisizione screenshot iniziale.
+6. Step `cerca`:
+   - standard (`KEYCODE_SEARCH`) se flag attivo
+   - altrimenti YOLO + tap
+7. Invio del `telefono` del contatto corrente.
+8. Attesa cambio schermata.
+9. Step `chat` via YOLO.
+10. Se `chat` trovata:
+    - tap su `chat`
+    - attesa cambio schermata
+11. Step `back`:
+    - standard (`KEYCODE_BACK`) se flag attivo
+    - altrimenti YOLO + tap
+12. Se il ciclo termina correttamente:
+    - `sent = 1` sul contatto
+13. Pausa randomizzata tra `1` e `2` secondi, poi contatto successivo.
+14. Finita la lista, il workflow riparte dall'inizio.
 
-1. Avvia loop continuo `Send4`.
-2. Il workflow operativo è identico a `Send2`.
-3. Cambia solo il filtro iniziale sui contatti:
-   - `telefono` valorizzato
-   - `exclude = 0`
-   - `sent = 0`
-4. `Send4` non richiede né `migration = true` né `agenda = true`.
-5. Anche per `Send4`, ad ogni successo:
-   - aggiorna il contatto mettendo `sent = 1`
+## 3) Regola OCR (opzionale)
+
+OCR viene applicato solo se `OCR chat` e' attivo.
+
+- Header ammessi in `r1`:
+  - `CHAT`
+  - `CONTATTI`
+- Estrazione nome:
+  - `CONTATTI` con `3` righe -> nome = `r2`
+  - `4` righe -> nome = `r2`
+  - `5` righe -> nome = `r2 + r3`
+
+Se OCR accettato:
+- aggiorna `ocr = true`
+- aggiorna `contactname` solo se vuoto
+
+### Caso speciale `INVITA SU WHATSAPP`
+
+Se `r1 = INVITA SU WHATSAPP`:
+- imposta `invita = true` sul contatto
+- invia `KEYCODE_BACK` due volte
+- attende cambio schermata
+- NON marca `sent`
+- passa al contatto successivo
+
+### OCR non accettato (non INVITA)
+
+Comportamento controllato da flag GUI:
+- `OCR stop contatto` -> interrompe solo il contatto corrente
+- `OCR stop workflow` -> ferma tutto il workflow
+
+I due flag stop OCR sono esclusivi e disabilitati quando `OCR chat` e' `false`.
+
+## 4) Errori e log
+
+Se una classe non viene trovata:
+- `cerca` -> salva in `Captures/cerca`
+- `chat` -> salva in `Captures/chat`
+- `back` -> salva in `Captures/back`
+
+Log unificato (video + file):
+- `Projects/<progetto>/navigation_yolo.log`

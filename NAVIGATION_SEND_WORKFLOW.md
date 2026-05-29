@@ -1,51 +1,34 @@
-# Workflow Navigation / Send
+# Workflow Navigation / Send (Numero Fisso)
 
-1. Avvia loop continuo Send.
-2. Verifica progetto selezionato.
-3. Verifica ADB.
-4. Ricostruisce struttura locale di inferenza dal DB.
-5. Ripristina modelli ONNX per:
-   - cerca
-   - back
-   - chat
-6. Avvia ADB.
-7. Seleziona il primo device collegato.
-8. Acquisisce screenshot.
-9. Esegue YOLO per cercare "cerca".
-10. Se trova "cerca":
-    - aspetta 3 secondi
-    - fa tap al centro del box
-    - aspetta 3 secondi
-    - aspetta cambio schermata
-11. Se non trova "cerca":
-    - salva immagine nel DB come priva_<timestamp>.png
-    - interrompe il ciclo corrente
-11.1
-    altrimenti	    
-    - adb manda la sequenza 3204751139
-    - pausa
-    - aspetta il cambio di schermata
-    - esegue YOLO per cercare "chat"
-12. Se trova "chat":
-    - fa tap sul centro del bounding box trovato
-    - aspetta cambio schermata
-13. Se non trova "chat":
-    - salva immagine nel DB come priva_<timestamp>_chat.png
-    - interrompe il ciclo corrente
-14. Dopo cambio schermata:
-    - acquisisce nuova immagine
-    - aggiorna preview
-    - esegue YOLO per cercare "back"
-15. Se trova "back":
-    - aspetta 3 secondi
-    - fa tap al centro del box
-    - aspetta 3 secondi
-    - aspetta nuova immagine
-    - aggiorna preview
-16. Se non trova "back":
-    - salva immagine nel DB come errore_<timestamp>_back.png
-    - interrompe il ciclo corrente
-17. Scrive log YOLO in navigation_yolo.log.
-18. Aspetta 10 secondi.
-19. Ripete il ciclo Send.
-20. Il pulsante Stop ferma il loop.
+1. Avvia loop continuo `Send`.
+2. Verifica progetto selezionato e disponibilita' ADB.
+3. Ricostruisce la struttura locale di inferenza dal DB.
+4. Ripristina i modelli `best.onnx` per:
+   - `cerca`
+   - `chat`
+   - `back`
+5. Avvia ADB e usa il primo device collegato.
+6. Acquisisce screenshot ADB.
+7. Step `cerca`:
+   - se `cerca standard` e' attivo, invia `KEYCODE_SEARCH` e attende cambio schermata
+   - altrimenti usa YOLO su classe `cerca` e fa tap
+8. Se `cerca` non viene trovata:
+   - salva immagine su file in `Projects/<progetto>/Captures/cerca/priva_<timestamp>.png`
+   - chiude il ciclo corrente
+9. Invia il numero fisso `3204751139`.
+10. Attende cambio schermata e cerca `chat` via YOLO.
+11. Se `chat` non viene trovata:
+   - salva immagine su file in `Projects/<progetto>/Captures/chat/priva_<timestamp>_chat.png`
+   - chiude il ciclo corrente
+12. Se `OCR chat` e' attivo e il workflow ha un contatto associato:
+   - applica regola OCR (vedi `workflow2.md`)
+13. Step `back`:
+   - se `back standard` e' attivo, invia `KEYCODE_BACK`
+   - altrimenti usa YOLO su classe `back` e fa tap
+14. Se `back` non viene trovata:
+   - salva immagine su file in `Projects/<progetto>/Captures/back/errore_<timestamp>_back.png`
+   - chiude il ciclo corrente
+15. Le pause operative sono randomizzate tra `1` e `2` secondi.
+16. I log a video e su file sono unificati in:
+   - `Projects/<progetto>/navigation_yolo.log`
+17. Il pulsante `Ferma workflow` interrompe il loop.
