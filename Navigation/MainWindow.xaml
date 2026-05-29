@@ -33,6 +33,32 @@
                            Text="Autoconnect PostgreSQL e selezione progetto dal DB"
                            Foreground="#FFF2B3"
                            FontSize="14" />
+                <Grid Margin="0,10,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="{Binding CurrentContactName, StringFormat=Contatto in corso: {0}}"
+                               Foreground="#FFD400"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               TextWrapping="Wrap" />
+                    <Grid Grid.Row="1"
+                          Margin="0,8,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding CurrentContactId, StringFormat=Id contatto: {0}}"
+                                   Foreground="#FFF2B3"
+                                   FontSize="14" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding SentContactsCount, StringFormat=Totale inviati: {0}}"
+                                   Foreground="#FFF2B3"
+                                   FontSize="14"
+                                   HorizontalAlignment="Right" />
+                    </Grid>
+                </Grid>
             </StackPanel>
         </Border>
 
@@ -115,10 +141,55 @@
                               Foreground="#FFD400"
                               BorderBrush="#FF9900"
                               FontSize="14" />
+                    <StackPanel Margin="0,10,0,0"
+                                Orientation="Horizontal">
+                        <CheckBox Content="cerca standard"
+                                  IsChecked="{Binding UseStandardSearch}"
+                                  Foreground="#FFF2B3"
+                                  VerticalAlignment="Center" />
+                        <CheckBox Margin="18,0,0,0"
+                                  Content="back standard"
+                                  IsChecked="{Binding UseStandardBack}"
+                                  Foreground="#FFF2B3"
+                                  VerticalAlignment="Center" />
+                        <CheckBox Margin="18,0,0,0"
+                                  Content="OCR chat"
+                                  IsChecked="{Binding UseChatOcr}"
+                                  Foreground="#FFF2B3"
+                                  VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Margin="0,8,0,0"
+                                Orientation="Horizontal">
+                        <CheckBox Content="OCR stop contatto"
+                                  IsChecked="{Binding StopContactOnOcrReject}"
+                                  IsEnabled="{Binding UseChatOcr}"
+                                  Foreground="#FFF2B3"
+                                  VerticalAlignment="Center" />
+                        <CheckBox Margin="18,0,0,0"
+                                  Content="OCR stop workflow"
+                                  IsChecked="{Binding StopWorkflowOnOcrReject}"
+                                  IsEnabled="{Binding UseChatOcr}"
+                                  Foreground="#FFF2B3"
+                                  VerticalAlignment="Center" />
+                    </StackPanel>
                 </StackPanel>
-                <StackPanel Grid.Column="1"
-                            Margin="18,26,0,0">
-                    <Button Width="150"
+                <Grid Grid.Column="1"
+                      Margin="18,26,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Button Grid.Row="0"
+                            Grid.Column="0"
+                            Margin="0,0,8,10"
+                            MinWidth="120"
                             Height="38"
                             Click="RefreshProjects_Click"
                             Content="Aggiorna progetti"
@@ -126,25 +197,97 @@
                             Background="#FFD400"
                             Foreground="Black"
                             BorderBrush="#FF9900" />
-                    <Button Margin="0,10,0,0"
-                            Width="150"
+                    <Button Grid.Row="0"
+                            Grid.Column="1"
+                            Margin="0,0,8,10"
+                            MinWidth="120"
                             Height="38"
                             Click="Send_Click"
-                            Content="Send"
+                            Content="Invio fisso"
                             FontWeight="Bold"
                             Background="#FF9900"
                             Foreground="Black"
                             BorderBrush="#FFD400" />
-                    <Button Margin="0,10,0,0"
-                            Width="150"
+                    <Button Grid.Row="0"
+                            Grid.Column="2"
+                            Margin="0,0,0,10"
+                            MinWidth="120"
+                            Height="38"
+                            Click="Send2_Click"
+                            Content="Invio migration"
+                            FontWeight="Bold"
+                            Background="#FFB300"
+                            Foreground="Black"
+                            BorderBrush="#FFD400" />
+
+                    <Button Grid.Row="1"
+                            Grid.Column="0"
+                            Margin="0,0,8,10"
+                            MinWidth="120"
+                            Height="38"
+                            Click="Send3_Click"
+                            Content="Invio agenda"
+                            FontWeight="Bold"
+                            Background="#FFCC66"
+                            Foreground="Black"
+                            BorderBrush="#FFD400" />
+                    <Button Grid.Row="1"
+                            Grid.Column="1"
+                            Margin="0,0,8,10"
+                            MinWidth="120"
+                            Height="38"
+                            Click="Send4_Click"
+                            Content="Invio tutti"
+                            FontWeight="Bold"
+                            Background="#FFE08A"
+                            Foreground="Black"
+                            BorderBrush="#FFD400" />
+                    <Button Grid.Row="1"
+                            Grid.Column="2"
+                            Margin="0,0,0,10"
+                            MinWidth="120"
+                            Height="38"
+                            Click="Send5_Click"
+                            Content="Invio solo agenda"
+                            FontWeight="Bold"
+                            Background="#FFF0B8"
+                            Foreground="Black"
+                            BorderBrush="#FFD400" />
+
+                    <Button Grid.Row="2"
+                            Grid.Column="0"
+                            Margin="0,0,8,0"
+                            MinWidth="120"
+                            Height="38"
+                            Click="Send6_Click"
+                            Content="Invio OCR nomi"
+                            FontWeight="Bold"
+                            Background="#F6F2D0"
+                            Foreground="Black"
+                            BorderBrush="#FFD400" />
+                    <Button Grid.Row="2"
+                            Grid.Column="1"
+                            Margin="0,0,8,0"
+                            MinWidth="120"
                             Height="38"
                             Click="Stop_Click"
-                            Content="Stop"
+                            Content="Ferma workflow"
                             FontWeight="Bold"
                             Background="#3A3A3A"
                             Foreground="#FFD400"
                             BorderBrush="#FFD400" />
-                </StackPanel>
+                    <Button Grid.Row="2"
+                            Grid.Column="2"
+                            Margin="0,0,0,0"
+                            MinWidth="120"
+                            Height="38"
+                            Click="ResetSent_Click"
+                            Content="Azzera inviati"
+                            FontWeight="Bold"
+                            Background="#555555"
+                            Foreground="#FFD400"
+                            BorderBrush="#FFD400" />
+                </Grid>
             </Grid>
         </Border>
 
@@ -190,16 +333,38 @@
                 BorderThickness="1"
                 BorderBrush="#5A5A5A"
                 Background="#181818">
-            <TextBox Text="{Binding StatusText, Mode=OneWay}"
-                     IsReadOnly="True"
-                     AcceptsReturn="True"
-                     TextWrapping="Wrap"
-                     VerticalScrollBarVisibility="Auto"
-                     Background="#111111"
-                     Foreground="#FFD400"
-                     BorderThickness="0"
-                     FontSize="15"
-                     FontFamily="Consolas" />
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <DockPanel Grid.Row="0"
+                           Margin="0,0,0,8">
+                    <TextBlock Text="Log workflow"
+                               Foreground="#FFD400"
+                               FontSize="15"
+                               FontWeight="Bold"
+                               VerticalAlignment="Center" />
+                    <CheckBox DockPanel.Dock="Right"
+                              Content="Auto-scroll"
+                              IsChecked="{Binding AutoScrollWorkflowLog}"
+                              Foreground="#FFF2B3"
+                              VerticalAlignment="Center" />
+                </DockPanel>
+                <TextBox x:Name="WorkflowLogTextBox"
+                         Grid.Row="1"
+                         Text="{Binding WorkflowLogText, Mode=OneWay}"
+                         TextChanged="WorkflowLogTextBox_TextChanged"
+                         IsReadOnly="True"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         Background="#111111"
+                         Foreground="#FFD400"
+                         BorderThickness="0"
+                         FontSize="15"
+                         FontFamily="Consolas" />
+            </Grid>
         </Border>
     </Grid>
 </Window>

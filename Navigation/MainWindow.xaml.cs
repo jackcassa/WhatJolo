@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
@@ -15,6 +16,7 @@ public partial class MainWindow : Window
         _viewModel = new MainWindowViewModel();
         DataContext = _viewModel;
         Loaded += MainWindow_Loaded;
+        Closing += MainWindow_Closing;
         _viewModel.PropertyChanged += ViewModel_PropertyChanged;
     }
 
@@ -33,9 +35,81 @@ public partial class MainWindow : Window
         await _viewModel.StartSendLoopAsync();
     }
 
+    private async void Send2_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.StartSend2MigrationLoopAsync();
+    }
+
+    private async void Send3_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.StartSend3AgendaLoopAsync();
+    }
+
+    private async void Send4_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.StartSend4AllLoopAsync();
+    }
+
+    private async void Send5_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.StartSend5AgendaOnlyLoopAsync();
+    }
+
+    private async void Send6_Click(object sender, RoutedEventArgs e)
+    {
+        await _viewModel.StartSend6OcrLoopAsync();
+    }
+
     private void Stop_Click(object sender, RoutedEventArgs e)
     {
         _viewModel.StopSendLoop();
+    }
+
+    private async void ResetSent_Click(object sender, RoutedEventArgs e)
+    {
+        var firstConfirmation = MessageBox.Show(
+            this,
+            "Confermi di voler azzerare il flag sent per tutti i contatti?",
+            "Conferma reset sent",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (firstConfirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var secondConfirmation = MessageBox.Show(
+            this,
+            "Ultima conferma: questa operazione e' globale. Vuoi continuare?",
+            "Conferma finale reset sent",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (secondConfirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.ResetSentAsync();
+            MessageBox.Show(
+                this,
+                "Il flag sent è stato azzerato per tutti i contatti.",
+                "Reset sent completato",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"Reset sent non riuscito:{Environment.NewLine}{ex.Message}",
+                "Errore reset sent",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -100,5 +174,25 @@ public partial class MainWindow : Window
     private static double MeasureBlockHeight(FrameworkElement element)
     {
         return element.ActualHeight + element.Margin.Top + element.Margin.Bottom;
+    }
+
+    private void MainWindow_Closing(object? sender, CancelEventArgs e)
+    {
+        _viewModel.SaveFormState();
+    }
+
+    private void WorkflowLogTextBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_viewModel.AutoScrollWorkflowLog)
+        {
+            return;
+        }
+
+        if (sender is not TextBox textBox)
+        {
+            return;
+        }
+
+        textBox.ScrollToEnd();
     }
 }

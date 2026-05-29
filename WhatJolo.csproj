@@ -5,6 +5,8 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.25.1" />
@@ -19,6 +21,8 @@
     <Compile Remove="Tools\**\*.cs" />
     <Compile Remove="Navigation\**\*.cs" />
     <Compile Remove="WhatJolo.Shared\**\*.cs" />
+    <Compile Remove="WhatJolo.WindowsOcr\**\*.cs" />
+    <Compile Remove="tmp-db-check-contacts-cols\**\*.cs" />
     <Compile Remove="ViewModelBase.cs" />
     <Compile Remove="PostgresConnectionSettings.cs" />
     <Compile Remove="SharedDatabase.cs" />
@@ -30,6 +34,8 @@
     <Compile Remove="YoloIconDetector.cs" />
     <Page Remove="Navigation\**\*.xaml" />
     <Page Remove="WhatJolo.Shared\**\*.xaml" />
+    <Page Remove="WhatJolo.WindowsOcr\**\*.xaml" />
+    <Page Remove="tmp-db-check-contacts-cols\**\*.xaml" />
     <ApplicationDefinition Remove="Navigation\App.xaml" />
   </ItemGroup>
 </Project>

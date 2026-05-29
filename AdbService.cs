@@ -114,6 +114,17 @@ public sealed class AdbService
         EnsureSuccess(result, "adb shell input text");
     }
 
+    public async Task SendKeyEventAsync(string deviceSerial, int keyCode)
+    {
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            throw new InvalidOperationException("Nessun device ADB selezionato.");
+        }
+
+        var result = await RunAdbAsync($"-s {deviceSerial} shell input keyevent {keyCode}");
+        EnsureSuccess(result, "adb shell input keyevent");
+    }
+
     private async Task<AdbCommandResult> RunAdbAsync(string arguments)
     {
         var startInfo = new ProcessStartInfo

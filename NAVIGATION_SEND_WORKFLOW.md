@@ -19,6 +19,9 @@
     - aspetta cambio schermata
 11. Se non trova "cerca":
     - salva immagine nel DB come priva_<timestamp>.png
+    - interrompe il ciclo corrente
+11.1
+    altrimenti	    
     - adb manda la sequenza 3204751139
     - pausa
     - aspetta il cambio di schermata
