@@ -1,6 +1,8 @@
 /.vs/
 /bin/
 /obj/
+**/bin/
+**/obj/
 Tools/**/bin/
 Tools/**/obj/
 *.user
@@ -8,6 +10,10 @@ db.instance.json
 pg_import.sql
 Captures/
 Projects/
+Default/
+Logs/
+sender/
+tmp-db-check-contacts-cols/
 */dataset/
 */runs/
 */runs_test/

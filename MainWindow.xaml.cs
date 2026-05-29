@@ -1049,6 +1049,8 @@ public partial class MainWindow : System.Windows.Window
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
+        _viewModel.CancelYoloTrainingOnShutdown();
+
         if (_adbPreviewWindow?.IsLoaded == true)
         {
             _adbPreviewWindow.Close();
@@ -1129,6 +1131,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string _selectedYoloModel;
     private YoloTrainingProfile? _selectedYoloTrainingProfile;
     private readonly YoloTrainingService _yoloTrainingService;
+    private CancellationTokenSource? _yoloTrainingCancellationTokenSource;
     private DataView? _databaseRowsView;
     private string _databaseTableStatus;
     private string? _selectedDatabaseTable;
@@ -2190,6 +2193,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         try
         {
+            _yoloTrainingCancellationTokenSource?.Cancel();
+            _yoloTrainingCancellationTokenSource?.Dispose();
+            _yoloTrainingCancellationTokenSource = new CancellationTokenSource();
+
             var result = await _yoloTrainingService.TrainAsync(
                 $"{SelectedProjectName}_{trainingClass}",
                 dataYamlPath,
@@ -2198,7 +2205,8 @@ public sealed class MainWindowViewModel : ViewModelBase
                 trainingProfile.Epochs,
                 trainingProfile.ImageSize,
                 trainingProfile.Batch,
-                progress);
+                progress,
+                _yoloTrainingCancellationTokenSource.Token);
 
             if (result.ExitCode != 0)
             {
@@ -2224,6 +2232,22 @@ public sealed class MainWindowViewModel : ViewModelBase
             YoloStatusText = ex.Message;
             AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Errore training YOLO: {ex.Message}");
             onFailed?.Invoke(ex.Message);
+        }
+        finally
+        {
+            _yoloTrainingCancellationTokenSource?.Dispose();
+            _yoloTrainingCancellationTokenSource = null;
+        }
+    }
+
+    public void CancelYoloTrainingOnShutdown()
+    {
+        try
+        {
+            _yoloTrainingCancellationTokenSource?.Cancel();
+        }
+        catch
+        {
         }
     }
 

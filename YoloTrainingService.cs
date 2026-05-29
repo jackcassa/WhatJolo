@@ -54,6 +54,19 @@ internal sealed class YoloTrainingService
         };
 
         exportProcess.Start();
+        using var exportCancellation = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!exportProcess.HasExited)
+                {
+                    exportProcess.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        });
         var exportStdOut = await exportProcess.StandardOutput.ReadToEndAsync(cancellationToken);
         var exportStdErr = await exportProcess.StandardError.ReadToEndAsync(cancellationToken);
         await exportProcess.WaitForExitAsync(cancellationToken);
@@ -206,6 +219,19 @@ internal sealed class YoloTrainingService
             new UTF8Encoding(false));
 
         process.Start();
+        using var trainCancellation = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        });
         Report(progress, new YoloTrainingProgress($"Processo YOLO avviato. PID={process.Id}", null, null, "info"));
 
         var stdOutTask = ReadStreamAsync(process.StandardOutput, line =>
@@ -347,6 +373,19 @@ internal sealed class YoloTrainingService
         };
 
         process.Start();
+        using var testCancellation = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        });
         Report(progress, new YoloTrainingProgress($"Processo YOLO test avviato. PID={process.Id}", null, null, "info"));
 
         var stdOutTask = ReadStreamAsync(process.StandardOutput, line =>
