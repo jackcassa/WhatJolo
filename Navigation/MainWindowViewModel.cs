@@ -15,20 +15,29 @@ internal sealed class MainWindowViewModel : ViewModelBase
     private const string SendModelClassName = "cerca";
     private const string SendBackClassName = "back";
     private const string SendChatClassName = "chat";
+    private const string SendInvioClassName = "invio";
     private const string SendFallbackSequence = "3204751139";
-    private static readonly string[] RequiredSendModelClasses = ["cerca", "back", "chat"];
+    private static readonly string[] RequiredSendModelClasses = ["cerca", "back", "chat", "invio"];
     private const float SendDetectionThreshold = 0.05f;
     private const int AndroidKeyCodeBack = 4;
     private const int AndroidKeyCodeSearch = 84;
+    private const int AndroidKeyCodePaste = 279;
     private const int ImageChangeWaitAttempts = 12;
     private const int ImageChangeWaitDelayMs = 500;
-    private const int BasePauseMs = 1_000;
-    private const int MaxRandomPauseMs = 1_000;
+    private const int FastUiSettleDelayMs = 200;
     private const string ContactFilterMigration = "migration";
     private const string ContactFilterAgenda = "agenda";
     private const string ContactFilterAgendaOnly = "agenda_only";
     private const string ContactFilterEmptyContactName = "empty_contactname";
+    private const string ContactFilterTest = "test";
     private const string ContactFilterAll = "all";
+    private const string SendModeFixed = "Fisso";
+    private const string SendModeMigration = "Migration";
+    private const string SendModeAgenda = "Agenda";
+    private const string SendModeAll = "Tutti";
+    private const string SendModeAgendaOnly = "Solo agenda";
+    private const string SendModeOcr = "OCR nomi vuoti";
+    private const string SendModeTest = "Test";
 
     private readonly AdbService _adbService;
     private readonly ProjectModelBlobService _projectModelBlobService;
@@ -49,9 +58,12 @@ internal sealed class MainWindowViewModel : ViewModelBase
     private bool _useChatOcr;
     private bool _stopContactOnOcrReject;
     private bool _stopWorkflowOnOcrReject;
+    private bool _usePasteAfterChat;
+    private bool _useDoubleBack;
     private bool _autoScrollWorkflowLog;
     private bool _isDatabaseConnected;
     private bool _isSendLoopRunning;
+    private string _selectedSendListMode;
     private BitmapSource? _lastCapturePreview;
     private CancellationTokenSource? _sendLoopCancellationTokenSource;
 
@@ -79,13 +91,19 @@ internal sealed class MainWindowViewModel : ViewModelBase
         _useChatOcr = formState.UseChatOcr;
         _stopContactOnOcrReject = formState.StopContactOnOcrReject;
         _stopWorkflowOnOcrReject = formState.StopWorkflowOnOcrReject;
+        _usePasteAfterChat = formState.UsePasteAfterChat;
+        _useDoubleBack = formState.UseDoubleBack;
         _autoScrollWorkflowLog = formState.AutoScrollWorkflowLog;
+        _selectedSendListMode = ResolveInitialSendMode(formState.SendListMode);
         ConnectionPreview = SharedDatabase.GetConnectionPreview();
         MachineName = Environment.MachineName;
         IpSummary = SharedAppBootstrap.BuildMachineIpSummary();
+        SendListModes = new ObservableCollection<string>();
+        EnsureSendListModes();
     }
 
     public ObservableCollection<string> ProjectNames { get; }
+    public ObservableCollection<string> SendListModes { get; }
 
     public string ConnectionPreview { get; }
 
@@ -224,6 +242,18 @@ internal sealed class MainWindowViewModel : ViewModelBase
         set => SetField(ref _autoScrollWorkflowLog, value);
     }
 
+    public bool UsePasteAfterChat
+    {
+        get => _usePasteAfterChat;
+        set => SetField(ref _usePasteAfterChat, value);
+    }
+
+    public bool UseDoubleBack
+    {
+        get => _useDoubleBack;
+        set => SetField(ref _useDoubleBack, value);
+    }
+
     public bool IsDatabaseConnected
     {
         get => _isDatabaseConnected;
@@ -242,8 +272,15 @@ internal sealed class MainWindowViewModel : ViewModelBase
         private set => SetField(ref _isSendLoopRunning, value);
     }
 
+    public string SelectedSendListMode
+    {
+        get => _selectedSendListMode;
+        set => SetField(ref _selectedSendListMode, value);
+    }
+
     public async Task InitializeAsync()
     {
+        EnsureSendListModes();
         var settings = SharedDatabase.LoadPostgresSettings();
         if (!settings.Enabled)
         {
@@ -272,7 +309,10 @@ internal sealed class MainWindowViewModel : ViewModelBase
             UseChatOcr = UseChatOcr,
             StopContactOnOcrReject = StopContactOnOcrReject,
             StopWorkflowOnOcrReject = StopWorkflowOnOcrReject,
-            AutoScrollWorkflowLog = AutoScrollWorkflowLog
+            UsePasteAfterChat = UsePasteAfterChat,
+            UseDoubleBack = UseDoubleBack,
+            AutoScrollWorkflowLog = AutoScrollWorkflowLog,
+            SendListMode = SelectedSendListMode
         };
 
         formState.Save(_formStatePath);
@@ -331,12 +371,6 @@ internal sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private static TimeSpan GetRandomizedPause()
-    {
-        var extraMs = Random.Shared.Next(0, MaxRandomPauseMs + 1);
-        return TimeSpan.FromMilliseconds(BasePauseMs + extraMs);
-    }
-
     public async Task StartSendLoopAsync()
     {
         if (IsSendLoopRunning)
@@ -345,24 +379,18 @@ internal sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        ResetWorkflowLog($"[{SelectedProjectName}] Avvio workflow Send (ciclo singolo).");
         _sendLoopCancellationTokenSource = new CancellationTokenSource();
         IsSendLoopRunning = true;
 
         try
         {
-            var cycleNumber = 1;
-            while (!_sendLoopCancellationTokenSource.IsCancellationRequested)
+            const int cycleNumber = 1;
+            await ExecuteSendCycleAsync(cycleNumber, _sendLoopCancellationTokenSource.Token, SendFallbackSequence, "Send");
+
+            if (!_sendLoopCancellationTokenSource.IsCancellationRequested)
             {
-                await ExecuteSendCycleAsync(cycleNumber, _sendLoopCancellationTokenSource.Token, SendFallbackSequence, "Send");
-
-                if (_sendLoopCancellationTokenSource.IsCancellationRequested)
-                {
-                    break;
-                }
-
-                SetStatusAndLog($"[{SelectedProjectName}] Ciclo Send {cycleNumber} completato. Pausa casuale di 1-2 secondi prima del prossimo ciclo...");
-                await Task.Delay(GetRandomizedPause(), _sendLoopCancellationTokenSource.Token);
-                cycleNumber++;
+                SetStatusAndLog($"[{SelectedProjectName}] Workflow Send completato (1 ciclo).");
             }
         }
         catch (OperationCanceledException)
@@ -379,6 +407,37 @@ internal sealed class MainWindowViewModel : ViewModelBase
             _sendLoopCancellationTokenSource?.Dispose();
             _sendLoopCancellationTokenSource = null;
             IsSendLoopRunning = false;
+        }
+    }
+
+    public async Task StartSelectedSendLoopAsync()
+    {
+        switch (SelectedSendListMode)
+        {
+            case SendModeFixed:
+                await StartSendLoopAsync();
+                break;
+            case SendModeMigration:
+                await StartSend2MigrationLoopAsync();
+                break;
+            case SendModeAgenda:
+                await StartSend3AgendaLoopAsync();
+                break;
+            case SendModeAll:
+                await StartSend4AllLoopAsync();
+                break;
+            case SendModeAgendaOnly:
+                await StartSend5AgendaOnlyLoopAsync();
+                break;
+            case SendModeOcr:
+                await StartSend6OcrLoopAsync();
+                break;
+            case SendModeTest:
+                await StartSendTestLoopAsync();
+                break;
+            default:
+                await StartSendTestLoopAsync();
+                break;
         }
     }
 
@@ -422,17 +481,16 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
                     if (cycleOutcome == SendCycleOutcome.CompletedMarkSent)
                     {
-                        SetStatusAndLog($"[{SelectedProjectName}] Send2 contatto completato: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] Send2 contatto completato: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
                     else if (cycleOutcome == SendCycleOutcome.CompletedNextCycle)
                     {
-                        SetStatusAndLog($"[{SelectedProjectName}] Send2 passa al ciclo successivo dopo gestione INVITA per: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] Send2 passa al ciclo successivo dopo gestione INVITA per: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
                     else
                     {
-                        SetStatusAndLog($"[{SelectedProjectName}] Send2 contatto chiuso senza invio finale: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] Send2 contatto chiuso senza invio finale: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
-                    await Task.Delay(GetRandomizedPause(), _sendLoopCancellationTokenSource.Token);
                 }
 
                 if (_sendLoopCancellationTokenSource.IsCancellationRequested)
@@ -462,45 +520,56 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
     public async Task StartSend2MigrationLoopAsync()
     {
-        await StartFilteredContactSendLoopAsync(
+        await StartContactSendLoopAsync(
             workflowName: "Send2",
-            contactFilterColumn: ContactFilterMigration,
-            emptyMessage: "Nessun contatto con telefono disponibile e migration attiva per Send2.");
+            emptyMessage: "Nessun contatto con telefono disponibile e migration attiva per Send2.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterMigration, token));
     }
 
     public async Task StartSend3AgendaLoopAsync()
     {
-        await StartFilteredContactSendLoopAsync(
+        await StartContactSendLoopAsync(
             workflowName: "Send3",
-            contactFilterColumn: ContactFilterAgenda,
-            emptyMessage: "Nessun contatto con telefono disponibile e agenda attiva per Send3.");
+            emptyMessage: "Nessun contatto con telefono disponibile e agenda attiva per Send3.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterAgenda, token));
     }
 
     public async Task StartSend4AllLoopAsync()
     {
-        await StartFilteredContactSendLoopAsync(
+        await StartContactSendLoopAsync(
             workflowName: "Send4",
-            contactFilterColumn: ContactFilterAll,
-            emptyMessage: "Nessun contatto con telefono disponibile per Send4.");
+            emptyMessage: "Nessun contatto con telefono disponibile per Send4.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterAll, token));
     }
 
     public async Task StartSend5AgendaOnlyLoopAsync()
     {
-        await StartFilteredContactSendLoopAsync(
+        await StartContactSendLoopAsync(
             workflowName: "Send5",
-            contactFilterColumn: ContactFilterAgendaOnly,
-            emptyMessage: "Nessun contatto con telefono disponibile con agenda attiva e migration disattiva per Send5.");
+            emptyMessage: "Nessun contatto con telefono disponibile con agenda attiva e migration disattiva per Send5.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterAgendaOnly, token));
     }
 
     public async Task StartSend6OcrLoopAsync()
     {
-        await StartFilteredContactSendLoopAsync(
+        await StartContactSendLoopAsync(
             workflowName: "Send6",
-            contactFilterColumn: ContactFilterEmptyContactName,
-            emptyMessage: "Nessun contatto con telefono disponibile e contactname vuoto per Send6.");
+            emptyMessage: "Nessun contatto con telefono disponibile e contactname vuoto per Send6.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterEmptyContactName, token));
     }
 
-    private async Task StartFilteredContactSendLoopAsync(string workflowName, string contactFilterColumn, string emptyMessage)
+    public async Task StartSendTestLoopAsync()
+    {
+        await StartContactSendLoopAsync(
+            workflowName: "SendTest",
+            emptyMessage: "Nessun contatto con telefono disponibile e test=true per SendTest.",
+            contactsLoader: token => LoadFilteredWorkflowContactsAsync(ContactFilterTest, token));
+    }
+
+    private async Task StartContactSendLoopAsync(
+        string workflowName,
+        string emptyMessage,
+        Func<CancellationToken, Task<IReadOnlyList<Workflow2Contact>>> contactsLoader)
     {
         if (IsSendLoopRunning)
         {
@@ -517,7 +586,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
             var cycleNumber = 1;
             while (!_sendLoopCancellationTokenSource.IsCancellationRequested)
             {
-                var contacts = await LoadFilteredWorkflowContactsAsync(contactFilterColumn, _sendLoopCancellationTokenSource.Token);
+                var contacts = await contactsLoader(_sendLoopCancellationTokenSource.Token);
                 if (contacts.Count == 0)
                 {
                     SetStatusAndLog($"[{SelectedProjectName}] {emptyMessage}");
@@ -546,17 +615,16 @@ internal sealed class MainWindowViewModel : ViewModelBase
                     {
                         await MarkContactSentAsync(contact.Id, _sendLoopCancellationTokenSource.Token);
                         await RefreshSentContactsCountAsync(_sendLoopCancellationTokenSource.Token);
-                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} contatto completato: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} contatto completato: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
                     else if (cycleOutcome == SendCycleOutcome.CompletedNextCycle)
                     {
-                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} continua col ciclo successivo dopo gestione INVITA per: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} continua col ciclo successivo dopo gestione INVITA per: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
                     else
                     {
-                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} contatto chiuso senza invio finale: {contact.DisplayName}. Pausa casuale di 1-2 secondi prima del prossimo contatto...");
+                        SetStatusAndLog($"[{SelectedProjectName}] {workflowName} contatto chiuso senza invio finale: {contact.DisplayName}. Passo al prossimo contatto...");
                     }
-                    await Task.Delay(GetRandomizedPause(), _sendLoopCancellationTokenSource.Token);
                 }
 
                 if (_sendLoopCancellationTokenSource.IsCancellationRequested)
@@ -619,6 +687,26 @@ internal sealed class MainWindowViewModel : ViewModelBase
         SetStatusAndLog($"[{SelectedProjectName}] Flag sent azzerato per tutti i contatti.");
     }
 
+    public async Task ResetExcludeAsync()
+    {
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            throw new InvalidOperationException("Database non connesso.");
+        }
+
+        await using var connection = SharedDatabase.CreateConnection();
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Contacts
+            SET Exclude = 0,
+                UpdatedAtUtc = CURRENT_TIMESTAMP;
+            """;
+        await command.ExecuteNonQueryAsync();
+        SetStatusAndLog($"[{SelectedProjectName}] Flag exclude azzerato per tutti i contatti.");
+    }
+
     private async Task<SendCycleOutcome> ExecuteSendCycleAsync(
         int cycleNumber,
         CancellationToken cancellationToken,
@@ -641,7 +729,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
         // 11. aspetta il cambio schermata, aggiorna la preview e cerca "chat"
         // 12. se non trova "chat" salva l'immagine come priva_<timestamp>_chat.png e interrompe il ciclo
         // 13. se trova "chat" fa il tap, aspetta il cambio schermata e aggiorna la preview
-        // 14. esegue il passaggio "back" con YOLO, tap e attesa cambio immagine
+        // 14. dopo il tap su "chat" invia testo "ch", attende cambio schermata e cerca "invio"
+        // 15. se trova "invio" fa tap, attende cambio schermata e aggiorna la preview
+        // 16. esegue il passaggio "back" con YOLO, tap e attesa cambio immagine
         cancellationToken.ThrowIfCancellationRequested();
 
         if (!_adbService.Exists())
@@ -658,9 +748,9 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
         try
         {
-            await PrepareInferenceStructureAsync();
+            var restoredModelPaths = await PrepareInferenceStructureAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            var modelPaths = EnsureSendModels();
+            var modelPaths = EnsureSendModels(restoredModelPaths);
             SetStatusAndLog($"[{SelectedProjectName}] {workflowName} ciclo {cycleNumber}: avvio ADB...");
             await _adbService.StartServerAsync();
             cancellationToken.ThrowIfCancellationRequested();
@@ -684,7 +774,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
             {
                 SetStatusAndLog($"[{SelectedProjectName}] Uso comando standard per '{SendModelClassName}' (KEYCODE_SEARCH)...");
                 await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeSearch);
-                await Task.Delay(GetRandomizedPause(), cancellationToken);
+                await Task.Delay(FastUiSettleDelayMs, cancellationToken);
                 SetStatusAndLog($"[{SelectedProjectName}] Attendo cambio schermata dopo KEYCODE_SEARCH...");
                 currentScreenBytes = await WaitForImageChangeAsync(selectedDevice, pngBytes, cancellationToken);
                 LastCapturePreview = LoadPreview(currentScreenBytes);
@@ -721,10 +811,14 @@ internal sealed class MainWindowViewModel : ViewModelBase
             SetStatusAndLog($"[{SelectedProjectName}] Invio sequenza {fallbackSequence}...");
             await _adbService.SendTextAsync(selectedDevice, fallbackSequence);
             cancellationToken.ThrowIfCancellationRequested();
-            await Task.Delay(GetRandomizedPause(), cancellationToken);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
             SetStatusAndLog($"[{SelectedProjectName}] Sequenza inviata. Attendo cambio schermata per cercare '{SendChatClassName}'...");
             var chatScreenBytes = await WaitForImageChangeAsync(selectedDevice, currentScreenBytes, cancellationToken);
             LastCapturePreview = LoadPreview(chatScreenBytes);
+            if (currentContact is not null && await HandleNoSearchOrInviteFromUiDumpAsync(selectedDevice, currentContact, cancellationToken))
+            {
+                return SendCycleOutcome.CompletedNoSent;
+            }
 
             var chatDetection = await DetectAndLogAsync(
                 chatScreenBytes,
@@ -755,19 +849,30 @@ internal sealed class MainWindowViewModel : ViewModelBase
                     return SendCycleOutcome.CompletedNoSent;
                 }
 
+                if (ocrOutcome == OcrFailureAction.MarkExcludeAndContinue)
+                {
+                    await MarkContactExcludeAsync(currentContact.Id, cancellationToken);
+                    SetStatusAndLog($"[{SelectedProjectName}] Contatto {currentContact.Id} marcato come exclude=true. Invio KEYCODE_BACK e continuo col prossimo contatto.");
+                   
+                    await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
+                    await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
+                    await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+                    var postExcludeBackBytes = await WaitForImageChangeAsync(selectedDevice, chatScreenBytes, cancellationToken);
+                    LastCapturePreview = LoadPreview(postExcludeBackBytes);
+                    SetStatusAndLog($"[{SelectedProjectName}] Cambio schermata rilevato dopo gestione EXCLUDE per contatto {currentContact.Id}. Continuo col prossimo contatto.");
+                    return SendCycleOutcome.CompletedNextCycle;
+                }
+
                 if (ocrOutcome == OcrFailureAction.MarkInvitaAndContinue)
                 {
                     await MarkContactInvitaAsync(currentContact.Id, cancellationToken);
-                    SetStatusAndLog($"[{SelectedProjectName}] Contatto {currentContact.Id} marcato come invita=true. Invio primo KEYCODE_BACK...");
+                    await MarkContactExcludeAsync(currentContact.Id, cancellationToken);
+                    SetStatusAndLog($"[{SelectedProjectName}] Contatto {currentContact.Id} marcato come invita=true ed exclude=true. Invio KEYCODE_BACK e continuo col prossimo contatto.");
                     await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
-                    await Task.Delay(GetRandomizedPause(), cancellationToken);
-                    SetStatusAndLog($"[{SelectedProjectName}] Primo KEYCODE_BACK inviato per contatto {currentContact.Id}. Invio secondo KEYCODE_BACK...");
-                    await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
-                    await Task.Delay(GetRandomizedPause(), cancellationToken);
-                    SetStatusAndLog($"[{SelectedProjectName}] Secondo KEYCODE_BACK inviato per contatto {currentContact.Id}. Attendo cambio schermata dopo INVITA...");
+                    await Task.Delay(FastUiSettleDelayMs, cancellationToken);
                     var postInviteBackBytes = await WaitForImageChangeAsync(selectedDevice, chatScreenBytes, cancellationToken);
                     LastCapturePreview = LoadPreview(postInviteBackBytes);
-                    SetStatusAndLog($"[{SelectedProjectName}] Cambio schermata rilevato dopo INVITA per contatto {currentContact.Id}. Continuo col prossimo contatto.");
+                    SetStatusAndLog($"[{SelectedProjectName}] Cambio schermata rilevato dopo gestione INVITA per contatto {currentContact.Id}. Continuo col prossimo contatto.");
                     return SendCycleOutcome.CompletedNextCycle;
                 }
             }
@@ -776,6 +881,12 @@ internal sealed class MainWindowViewModel : ViewModelBase
             SetStatusAndLog($"[{SelectedProjectName}] Attendo cambio schermata dopo il tap su '{SendChatClassName}'...");
             currentScreenBytes = await WaitForImageChangeAsync(selectedDevice, chatScreenBytes, cancellationToken);
             LastCapturePreview = LoadPreview(currentScreenBytes);
+            currentScreenBytes = await ExecuteInvioStepAsync(selectedDevice, modelPaths, currentScreenBytes, $"{timestamp}_invio", cancellationToken);
+            if (currentScreenBytes is null)
+            {
+                return SendCycleOutcome.CompletedNoSent;
+            }
+
             var backScreenBytes = await ExecuteBackStepAsync(selectedDevice, modelPaths, currentScreenBytes, $"{timestamp}_back", cancellationToken);
             if (backScreenBytes is null)
             {
@@ -816,6 +927,103 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return attempt;
     }
 
+    private async Task<bool> HandleNoSearchOrInviteFromUiDumpAsync(string selectedDevice, Workflow2Contact currentContact, CancellationToken cancellationToken)
+    {
+        var xml = await _adbService.DumpUiHierarchyXmlAsync(selectedDevice);
+        var uiDumpPath = await SaveWorkflowXmlDumpToFileSystemAsync(
+            reason: "search_state",
+            currentContact,
+            xml);
+        SetStatusAndLog($"[{SelectedProjectName}] UI dump salvato per controllo ricerca/INVITA: {uiDumpPath}");
+
+        var hasNoResults = _adbService.ContainsNodeByTextOrResourceId(
+            xml,
+            text: "Nessun risultato trovato",
+            resourceId: "com.whatsapp.w4b:id/search_no_matches");
+
+        var hasChatOrContactRows = _adbService.HasAnyNodeByResourceId(
+            xml,
+            "com.whatsapp.w4b:id/contact_row_container",
+            "com.whatsapp.w4b:id/conversations_row_contact_name");
+
+        // Nuova regola: "Nessun risultato trovato" è valido solo se CHAT/CONTATTI sono davvero vuoti.
+        var shouldTreatAsNoResults = hasNoResults && !hasChatOrContactRows;
+        if (!shouldTreatAsNoResults)
+        {
+            if (hasNoResults && hasChatOrContactRows)
+            {
+                SetStatusAndLog($"[{SelectedProjectName}] UI dump: 'Nessun risultato trovato' presente ma CHAT/CONTATTI non vuoti. Non applico exclude. Dump={uiDumpPath}");
+            }
+            var hasInviteSection = _adbService.ContainsNodeByTextOrResourceId(
+                xml,
+                text: "INVITA SU WHATSAPP",
+                resourceId: string.Empty);
+            var hasInviteButton = _adbService.ContainsNodeByTextOrResourceId(
+                xml,
+                text: "INVITA",
+                resourceId: "com.whatsapp.w4b:id/invite_btn");
+
+            if (!hasInviteSection && !hasInviteButton)
+            {
+                return false;
+            }
+
+            await MarkContactInvitaAsync(currentContact.Id, cancellationToken);
+            await MarkContactExcludeAsync(currentContact.Id, cancellationToken);
+            SetStatusAndLog($"[{SelectedProjectName}] UI dump: rilevato caso INVITA per contatto {currentContact.Id}. invita=true, exclude=true e ritorno indietro. Dump={uiDumpPath}");
+            if (_adbService.TryFindNodeByContentDesc(xml, "Indietro", out var inviteBackNode))
+            {
+                var (tapX, tapY) = _adbService.GetNodeCenter(inviteBackNode);
+                SetStatusAndLog($"[{SelectedProjectName}] Tap back da XML @ {tapX},{tapY}.");
+                await _adbService.TapAsync(selectedDevice, tapX, tapY);
+                await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+                SetStatusAndLog($"[{SelectedProjectName}] INVITA: back eseguito, passo al prossimo contatto.");
+                return true;
+            }
+
+            SetStatusAndLog($"[{SelectedProjectName}] INVITA rilevato ma nodo back non rilevato da XML. Fallback KEYCODE_BACK.");
+            await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+            return true;
+        }
+
+        await MarkContactExcludeAsync(currentContact.Id, cancellationToken);
+        SetStatusAndLog($"[{SelectedProjectName}] UI dump: rilevato 'Nessun risultato trovato' per contatto {currentContact.Id}. exclude=true e tap su back da XML. Dump={uiDumpPath}");
+        if (_adbService.TryFindNodeByContentDesc(xml, "Indietro", out var backNode))
+        {
+            var (tapX, tapY) = _adbService.GetNodeCenter(backNode);
+            SetStatusAndLog($"[{SelectedProjectName}] Tap back da XML @ {tapX},{tapY}.");
+            await _adbService.TapAsync(selectedDevice, tapX, tapY);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+            SetStatusAndLog($"[{SelectedProjectName}] Nessun risultato: back eseguito, passo al prossimo contatto.");
+            return true;
+        }
+
+        SetStatusAndLog($"[{SelectedProjectName}] Nessun risultato trovato ma nodo back non rilevato da XML. Fallback KEYCODE_BACK.");
+        await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
+        await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+        return true;
+    }
+
+    private async Task<string> SaveWorkflowXmlDumpToFileSystemAsync(string reason, Workflow2Contact currentContact, string xmlContent)
+    {
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? "state" : reason.Trim();
+        var normalizedPhone = string.IsNullOrWhiteSpace(currentContact.Telefono)
+            ? "no_phone"
+            : new string(currentContact.Telefono.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            normalizedPhone = "no_phone";
+        }
+
+        var fileName = $"uidump_{DateTime.Now:yyyyMMdd_HHmmss_fff}_id{currentContact.Id}_{normalizedPhone}_{normalizedReason}.xml";
+        var xmlPath = Path.Combine(_workspaceService.GetCapturesPath(SelectedProjectName), "ui_dump");
+        Directory.CreateDirectory(xmlPath);
+        var outputPath = Path.Combine(xmlPath, fileName);
+        await File.WriteAllTextAsync(outputPath, xmlContent ?? string.Empty);
+        return outputPath;
+    }
+
     private async Task TapDetectionAsync(
         string selectedDevice,
         string labelName,
@@ -824,15 +1032,62 @@ internal sealed class MainWindowViewModel : ViewModelBase
     {
         var tapX = detection.Bounds.Left + (detection.Bounds.Width / 2);
         var tapY = detection.Bounds.Top + (detection.Bounds.Height / 2);
-        SetStatusAndLog($"[{SelectedProjectName}] '{labelName}' riconosciuta ({detection.Confidence:P0}). Pausa casuale di 1-2 secondi prima del tap ADB @ {tapX},{tapY}...");
-        await Task.Delay(GetRandomizedPause(), cancellationToken);
+        SetStatusAndLog($"[{SelectedProjectName}] '{labelName}' riconosciuta ({detection.Confidence:P0}). Tap ADB rapido @ {tapX},{tapY}...");
+        await Task.Delay(FastUiSettleDelayMs, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         SetStatusAndLog($"[{SelectedProjectName}] Tap ADB su '{labelName}' @ {tapX},{tapY}...");
         await _adbService.TapAsync(selectedDevice, tapX, tapY);
         cancellationToken.ThrowIfCancellationRequested();
-        SetStatusAndLog($"[{SelectedProjectName}] Tap ADB eseguito su '{labelName}' ({detection.Confidence:P0}) @ {tapX},{tapY}. Pausa casuale di 1-2 secondi dopo il tap...");
-        await Task.Delay(GetRandomizedPause(), cancellationToken);
+        SetStatusAndLog($"[{SelectedProjectName}] Tap ADB eseguito su '{labelName}' ({detection.Confidence:P0}) @ {tapX},{tapY}. Breve attesa post-tap...");
+        await Task.Delay(FastUiSettleDelayMs, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task<byte[]?> ExecuteInvioStepAsync(
+        string selectedDevice,
+        IReadOnlyDictionary<string, string> modelPaths,
+        byte[] baselineBytes,
+        string imageSuffix,
+        CancellationToken cancellationToken)
+    {
+        byte[] postCommandBytes;
+        if (UsePasteAfterChat)
+        {
+            SetStatusAndLog($"[{SelectedProjectName}] Invio comando ADB paste (KEYCODE_PASTE) dopo il tap su '{SendChatClassName}'...");
+            await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodePaste);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+            SetStatusAndLog($"[{SelectedProjectName}] Attendo cambio schermata dopo comando paste...");
+            postCommandBytes = await WaitForImageChangeAsync(selectedDevice, baselineBytes, cancellationToken);
+        }
+        else
+        {
+            SetStatusAndLog($"[{SelectedProjectName}] Invio (paste) disabilitato da checkbox: salto KEYCODE_PASTE e step '{SendInvioClassName}'. Passo direttamente a '{SendBackClassName}'.");
+            LastCapturePreview = LoadPreview(baselineBytes);
+            return baselineBytes;
+        }
+        LastCapturePreview = LoadPreview(postCommandBytes);
+
+        var invioAttempt = await DetectAndLogAsync(
+            postCommandBytes,
+            modelPaths[SendInvioClassName],
+            SendInvioClassName,
+            phaseName: SendInvioClassName,
+            imageName: $"adb_{imageSuffix}.png");
+
+        if (invioAttempt.BestDetection is null)
+        {
+            var errorFileName = $"errore_{imageSuffix}.png";
+            var errorPath = await SaveWorkflowImageToFileSystemAsync(SendInvioClassName, errorFileName, postCommandBytes);
+            SetStatusAndLog($"[{SelectedProjectName}] '{SendInvioClassName}' non riconosciuta. Immagine salvata su file come {errorPath}. Flusso interrotto.");
+            return null;
+        }
+
+        await TapDetectionAsync(selectedDevice, SendInvioClassName, invioAttempt.BestDetection, cancellationToken);
+        SetStatusAndLog($"[{SelectedProjectName}] Attendo nuova immagine dopo il tap su '{SendInvioClassName}'...");
+        var postTapBytes = await WaitForImageChangeAsync(selectedDevice, postCommandBytes, cancellationToken);
+        LastCapturePreview = LoadPreview(postTapBytes);
+        SetStatusAndLog($"[{SelectedProjectName}] Nuova immagine rilevata dopo il tap su '{SendInvioClassName}'.");
+        return postTapBytes;
     }
 
     private async Task<byte[]?> ExecuteBackStepAsync(
@@ -848,9 +1103,10 @@ internal sealed class MainWindowViewModel : ViewModelBase
         if (UseStandardBack)
         {
             SetStatusAndLog($"[{SelectedProjectName}] Uso comando standard per '{SendBackClassName}' (KEYCODE_BACK)...");
-            await Task.Delay(GetRandomizedPause(), cancellationToken);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
+            SetStatusAndLog($"[{SelectedProjectName}] Invio KEYCODE_BACK...");
             await _adbService.SendKeyEventAsync(selectedDevice, AndroidKeyCodeBack);
-            await Task.Delay(GetRandomizedPause(), cancellationToken);
+            await Task.Delay(FastUiSettleDelayMs, cancellationToken);
             SetStatusAndLog($"[{SelectedProjectName}] Attendo nuova immagine dopo KEYCODE_BACK...");
             var postBackImageBytes = await WaitForImageChangeAsync(selectedDevice, baselineBytes, cancellationToken);
             LastCapturePreview = LoadPreview(postBackImageBytes);
@@ -893,9 +1149,20 @@ internal sealed class MainWindowViewModel : ViewModelBase
             {
                 var rejectMessage = $"[{SelectedProjectName}] OCR chat non accettato per contatto {contact.Id}: {ocrResult.Reason}. Righe: {linesText}";
                 AppendWorkflowLog(rejectMessage);
+                var ocrRejectImagePath = await SaveOcrRejectedImageWithBoundsAsync(
+                    contact,
+                    chatScreenBytes,
+                    detection.Bounds,
+                    ocrResult.Reason);
+                AppendWorkflowLog($"[{SelectedProjectName}] OCR chat immagine non riconosciuta salvata con box OCR su: {ocrRejectImagePath}");
                 if (ocrResult.ForceStopWorkflow)
                 {
                     return OcrFailureAction.StopWorkflow;
+                }
+
+                if (ocrResult.MarkExcludeAndContinue)
+                {
+                    return OcrFailureAction.MarkExcludeAndContinue;
                 }
 
                 if (ocrResult.MarkInvitaAndContinue)
@@ -941,6 +1208,52 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
             return OcrFailureAction.Continue;
         }
+    }
+
+    private async Task<string> SaveOcrRejectedImageWithBoundsAsync(
+        Workflow2Contact contact,
+        byte[] imageBytes,
+        Rectangle originalOcrBounds,
+        string reason)
+    {
+        using var sourceStream = new MemoryStream(imageBytes);
+        using var sourceBitmap = new Bitmap(sourceStream);
+        using var annotatedBitmap = new Bitmap(sourceBitmap);
+        using var graphics = Graphics.FromImage(annotatedBitmap);
+
+        var imageRect = new Rectangle(0, 0, annotatedBitmap.Width, annotatedBitmap.Height);
+        var expandedOcrBounds = ExpandOcrBoundsKeepingCenter(originalOcrBounds);
+        var normalizedOriginalBounds = Rectangle.Intersect(imageRect, originalOcrBounds);
+        var normalizedExpandedBounds = Rectangle.Intersect(imageRect, expandedOcrBounds);
+        if (normalizedOriginalBounds.Width > 0 && normalizedOriginalBounds.Height > 0)
+        {
+            using var originalPen = new Pen(Color.Yellow, 4f);
+            graphics.DrawRectangle(originalPen, normalizedOriginalBounds);
+        }
+
+        if (normalizedExpandedBounds.Width > 0 && normalizedExpandedBounds.Height > 0)
+        {
+            using var expandedPen = new Pen(Color.Red, 4f);
+            graphics.DrawRectangle(expandedPen, normalizedExpandedBounds);
+        }
+
+        var boxText = $"OCR BOX id={contact.Id} tel={contact.Telefono} reason={reason}";
+        using var textFont = new System.Drawing.Font(System.Drawing.FontFamily.GenericMonospace, 18f, System.Drawing.FontStyle.Bold);
+        var textSize = graphics.MeasureString(boxText, textFont);
+        var textRect = new RectangleF(
+            8f,
+            8f,
+            Math.Min(annotatedBitmap.Width - 16f, textSize.Width + 20f),
+            textSize.Height + 12f);
+        using var textBackground = new SolidBrush(Color.FromArgb(180, 0, 0, 0));
+        using var textBrush = new SolidBrush(Color.Lime);
+        graphics.FillRectangle(textBackground, textRect);
+        graphics.DrawString(boxText, textFont, textBrush, textRect.Left + 8f, textRect.Top + 4f);
+
+        await using var outputStream = new MemoryStream();
+        annotatedBitmap.Save(outputStream, System.Drawing.Imaging.ImageFormat.Png);
+        var fileName = $"ocr_reject_{DateTime.Now:yyyyMMdd_HHmmss_fff}_id{contact.Id}.png";
+        return await SaveWorkflowImageToFileSystemAsync("chat_ocr", fileName, outputStream.ToArray());
     }
 
     private async Task ConnectAndLoadProjectsAsync()
@@ -1036,6 +1349,7 @@ internal sealed class MainWindowViewModel : ViewModelBase
             !string.Equals(filterColumn, ContactFilterAgenda, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(filterColumn, ContactFilterAgendaOnly, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(filterColumn, ContactFilterEmptyContactName, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(filterColumn, ContactFilterTest, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(filterColumn, ContactFilterAll, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException($"Filtro contatti non supportato: {filterColumn}.");
@@ -1091,7 +1405,8 @@ internal sealed class MainWindowViewModel : ViewModelBase
 
         using var sourceStream = new MemoryStream(imageBytes);
         using var sourceBitmap = new Bitmap(sourceStream);
-        var normalizedBounds = Rectangle.Intersect(new Rectangle(0, 0, sourceBitmap.Width, sourceBitmap.Height), bounds);
+        var expandedBounds = ExpandOcrBoundsKeepingCenter(bounds);
+        var normalizedBounds = Rectangle.Intersect(new Rectangle(0, 0, sourceBitmap.Width, sourceBitmap.Height), expandedBounds);
         if (normalizedBounds.Width <= 0 || normalizedBounds.Height <= 0)
         {
             return new ChatOcrResult(false, null, "bounding box fuori immagine", [], false);
@@ -1105,38 +1420,59 @@ internal sealed class MainWindowViewModel : ViewModelBase
         {
             var cropBytes = await File.ReadAllBytesAsync(tempImagePath);
             var ocrLines = await _windowsOcrService.ReadLinesFromPngBytesAsync(cropBytes, new Rectangle(0, 0, cropBitmap.Width, cropBitmap.Height));
+            if (TryFindNonTraHeaderLine(ocrLines, out var nonTraLine))
+            {
+                return new ChatOcrResult(false, null, $"rilevato testo OCR = '{nonTraLine}'", ocrLines, false, false, true);
+            }
+
+            if (TryFindInvitaLine(ocrLines, out var invitaLine))
+            {
+                return new ChatOcrResult(false, null, $"rilevato testo OCR = '{invitaLine}'", ocrLines, false, true);
+            }
+
             var firstLine = ocrLines.Count > 0 ? (ocrLines[0]?.Trim() ?? string.Empty) : string.Empty;
             if (string.Equals(firstLine, "INVITA SU WHATSAPP", StringComparison.OrdinalIgnoreCase))
             {
                 return new ChatOcrResult(false, null, "prima riga OCR = 'INVITA SU WHATSAPP'", ocrLines, false, true);
             }
 
-            var isAcceptedHeader =
-                string.Equals(firstLine, "CHAT", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(firstLine, "CONTATTI", StringComparison.OrdinalIgnoreCase);
-            if (!isAcceptedHeader)
+            var headerMatch = FindAcceptedOcrHeader(ocrLines);
+            if (headerMatch is null)
             {
-                return new ChatOcrResult(false, null, $"prima riga OCR attesa='CHAT' o 'CONTATTI' trovata='{firstLine}'", ocrLines, false);
+                return new ChatOcrResult(false, null, "intestazione OCR non trovata: atteso 'CHAT' o 'CONTATTI' o 'NON TRA I TUOI CONTATTI' (fuzzy distanza=1 su CHAT/CONTATTI)", ocrLines, false);
             }
 
             string candidateName;
-            if (string.Equals(firstLine, "CONTATTI", StringComparison.OrdinalIgnoreCase) && ocrLines.Count == 3)
+            var headerIndex = headerMatch.Value.Index;
+            var acceptedHeader = headerMatch.Value.Header;
+            if (string.Equals(acceptedHeader, "NON TRA I TUOI CONTATTI", StringComparison.OrdinalIgnoreCase))
             {
-                candidateName = ocrLines[1]?.Trim() ?? string.Empty;
+                return new ChatOcrResult(false, null, "intestazione OCR = 'NON TRA I TUOI CONTATTI'", ocrLines, false, false, true);
             }
-            else if (ocrLines.Count == 4)
+
+            var remainingLines = ocrLines.Count - (headerIndex + 1);
+            if (remainingLines <= 0)
             {
-                candidateName = ocrLines[1]?.Trim() ?? string.Empty;
+                return new ChatOcrResult(false, null, "riga nome OCR non presente dopo intestazione", ocrLines, false);
             }
-            else if (ocrLines.Count == 5)
+
+            if (string.Equals(acceptedHeader, "CONTATTI", StringComparison.OrdinalIgnoreCase) && remainingLines == 2)
             {
-                var secondLine = ocrLines[1]?.Trim() ?? string.Empty;
-                var thirdLine = ocrLines[2]?.Trim() ?? string.Empty;
+                candidateName = ocrLines[headerIndex + 1]?.Trim() ?? string.Empty;
+            }
+            else if (remainingLines == 3)
+            {
+                candidateName = ocrLines[headerIndex + 1]?.Trim() ?? string.Empty;
+            }
+            else if (remainingLines >= 4)
+            {
+                var secondLine = ocrLines[headerIndex + 1]?.Trim() ?? string.Empty;
+                var thirdLine = ocrLines[headerIndex + 2]?.Trim() ?? string.Empty;
                 candidateName = string.Join(" ", new[] { secondLine, thirdLine }.Where(line => !string.IsNullOrWhiteSpace(line)));
             }
             else
             {
-                return new ChatOcrResult(false, null, $"linee OCR attese=3 (con CONTATTI) o 4 o 5 trovate={ocrLines.Count}", ocrLines, false);
+                candidateName = ocrLines[headerIndex + 1]?.Trim() ?? string.Empty;
             }
 
             var cleanedName = CleanChatContactName(candidateName);
@@ -1168,6 +1504,211 @@ internal sealed class MainWindowViewModel : ViewModelBase
         cleaned = Regex.Replace(cleaned, @"\s+\d{1,2}/\d{1,2}$", string.Empty);
         cleaned = Regex.Replace(cleaned, @"\s+(oggi|ieri)$", string.Empty, RegexOptions.IgnoreCase);
         return cleaned.Trim();
+    }
+
+    private static string ResolveInitialSendMode(string? mode)
+    {
+        return mode switch
+        {
+            SendModeFixed => SendModeFixed,
+            SendModeMigration => SendModeMigration,
+            SendModeAgenda => SendModeAgenda,
+            SendModeAll => SendModeAll,
+            SendModeAgendaOnly => SendModeAgendaOnly,
+            SendModeOcr => SendModeOcr,
+            SendModeTest => SendModeTest,
+            _ => SendModeFixed
+        };
+    }
+
+    private void EnsureSendListModes()
+    {
+        var expectedModes = new[]
+        {
+            SendModeFixed,
+            SendModeMigration,
+            SendModeAgenda,
+            SendModeAll,
+            SendModeAgendaOnly,
+            SendModeOcr,
+            SendModeTest
+        };
+
+        if (SendListModes.Count == expectedModes.Length &&
+            expectedModes.All(mode => SendListModes.Contains(mode)))
+        {
+            if (!SendListModes.Contains(SelectedSendListMode))
+            {
+                SelectedSendListMode = SendModeFixed;
+            }
+
+            return;
+        }
+
+        SendListModes.Clear();
+        foreach (var mode in expectedModes)
+        {
+            SendListModes.Add(mode);
+        }
+
+        if (!SendListModes.Contains(SelectedSendListMode))
+        {
+            SelectedSendListMode = SendModeFixed;
+        }
+    }
+
+    private static Rectangle ExpandOcrBoundsKeepingCenter(Rectangle bounds)
+    {
+        var expandedHeight = (int)Math.Round(bounds.Height * 1.30, MidpointRounding.AwayFromZero);
+        var verticalPadding = (int)Math.Round((expandedHeight - bounds.Height) / 2.0, MidpointRounding.AwayFromZero);
+        return new Rectangle(
+            bounds.X,
+            bounds.Y - verticalPadding,
+            bounds.Width,
+            expandedHeight);
+    }
+
+    private static string NormalizeOcrHeader(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var lettersOnly = new string(value
+            .ToUpperInvariant()
+            .Where(char.IsLetter)
+            .ToArray());
+        return lettersOnly;
+    }
+
+    private static bool TryFindInvitaLine(IReadOnlyList<string> ocrLines, out string matchedLine)
+    {
+        foreach (var line in ocrLines)
+        {
+            var trimmed = line?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            var normalized = NormalizeOcrHeader(trimmed);
+            if (string.Equals(normalized, "INVITASUWHATSAPP", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(normalized, "INVITA", StringComparison.OrdinalIgnoreCase))
+            {
+                matchedLine = trimmed;
+                return true;
+            }
+        }
+
+        matchedLine = string.Empty;
+        return false;
+    }
+
+    private static bool TryFindNonTraHeaderLine(IReadOnlyList<string> ocrLines, out string matchedLine)
+    {
+        foreach (var line in ocrLines)
+        {
+            var trimmed = line?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                continue;
+            }
+
+            var normalized = NormalizeOcrHeader(trimmed);
+            if (ComputeLevenshteinDistance(normalized, "NONTRAITUOICONTATTI") <= 1)
+            {
+                matchedLine = trimmed;
+                return true;
+            }
+        }
+
+        matchedLine = string.Empty;
+        return false;
+    }
+
+    private static string? TryResolveAcceptedOcrHeader(string normalizedHeader)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedHeader))
+        {
+            return null;
+        }
+
+        var nonTraDistance = ComputeLevenshteinDistance(normalizedHeader, "NONTRAITUOICONTATTI");
+        if (nonTraDistance <= 1)
+        {
+            return "NON TRA I TUOI CONTATTI";
+        }
+
+        var chatDistance = ComputeLevenshteinDistance(normalizedHeader, "CHAT");
+        if (chatDistance <= 1)
+        {
+            return "CHAT";
+        }
+
+        var contattiDistance = ComputeLevenshteinDistance(normalizedHeader, "CONTATTI");
+        if (contattiDistance <= 1)
+        {
+            return "CONTATTI";
+        }
+
+        return null;
+    }
+
+    private static (int Index, string Header)? FindAcceptedOcrHeader(IReadOnlyList<string> ocrLines)
+    {
+        for (var i = 0; i < ocrLines.Count; i++)
+        {
+            var normalized = NormalizeOcrHeader(ocrLines[i]);
+            var accepted = TryResolveAcceptedOcrHeader(normalized);
+            if (accepted is not null)
+            {
+                return (i, accepted);
+            }
+        }
+
+        return null;
+    }
+
+    private static int ComputeLevenshteinDistance(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        if (left.Length == 0)
+        {
+            return right.Length;
+        }
+
+        if (right.Length == 0)
+        {
+            return left.Length;
+        }
+
+        var costs = new int[right.Length + 1];
+        for (var j = 0; j <= right.Length; j++)
+        {
+            costs[j] = j;
+        }
+
+        for (var i = 1; i <= left.Length; i++)
+        {
+            var previousDiagonal = costs[0];
+            costs[0] = i;
+            for (var j = 1; j <= right.Length; j++)
+            {
+                var previousUp = costs[j];
+                var substitutionCost = left[i - 1] == right[j - 1] ? 0 : 1;
+                costs[j] = Math.Min(
+                    Math.Min(costs[j] + 1, costs[j - 1] + 1),
+                    previousDiagonal + substitutionCost);
+                previousDiagonal = previousUp;
+            }
+        }
+
+        return costs[right.Length];
     }
 
     private static async Task MarkContactOcrAsync(long contactId, string? recognizedName)
@@ -1250,6 +1791,30 @@ internal sealed class MainWindowViewModel : ViewModelBase
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    private static async Task MarkContactExcludeAsync(long contactId, CancellationToken cancellationToken)
+    {
+        if (!SharedDatabase.IsDatabaseConnected())
+        {
+            return;
+        }
+
+        await using var connection = SharedDatabase.CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            UPDATE Contacts
+            SET Exclude = 1,
+                UpdatedAtUtc = CURRENT_TIMESTAMP
+            WHERE Id = @id;
+            """;
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "id";
+        parameter.Value = contactId;
+        command.Parameters.Add(parameter);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private async Task RefreshSentContactsCountAsync(CancellationToken cancellationToken = default)
     {
         if (!SharedDatabase.IsDatabaseConnected())
@@ -1283,21 +1848,26 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return bitmap;
     }
 
-    private Dictionary<string, string> EnsureSendModels()
+    private Dictionary<string, string> EnsureSendModels(IReadOnlyDictionary<string, string> restoredModelPaths)
     {
         var modelPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var className in RequiredSendModelClasses)
         {
-            var localModelPath = _workspaceService.FindLatestYoloOnnxPath(SelectedProjectName, className);
+            if (!restoredModelPaths.TryGetValue(className, out var localModelPath))
+            {
+                throw new FileNotFoundException($"best.onnx dal DB non ripristinato per la classe {className}.");
+            }
+
             if (!string.IsNullOrWhiteSpace(localModelPath) && File.Exists(localModelPath))
             {
-                SetStatusAndLog($"[{SelectedProjectName}] best.onnx locale trovato per classe {className}: {localModelPath}");
+                EnsureRuntimeLabelFiles(localModelPath, className);
+                SetStatusAndLog($"[{SelectedProjectName}] best.onnx sincronizzato dal DB per classe {className}: {localModelPath}");
                 modelPaths[className] = localModelPath;
                 continue;
             }
 
-            throw new FileNotFoundException($"best.onnx locale non trovato per la classe {className} dopo la ricostruzione della struttura di inferenza.");
+            throw new FileNotFoundException($"best.onnx dal DB non disponibile localmente per la classe {className} dopo la sincronizzazione.");
         }
 
         if (!modelPaths.TryGetValue(SendModelClassName, out var detectionModelPath) || string.IsNullOrWhiteSpace(detectionModelPath))
@@ -1308,11 +1878,19 @@ internal sealed class MainWindowViewModel : ViewModelBase
         return modelPaths;
     }
 
-    private async Task PrepareInferenceStructureAsync()
+    private async Task<Dictionary<string, string>> PrepareInferenceStructureAsync()
     {
-        SetStatusAndLog($"[{SelectedProjectName}] Ricostruzione struttura locale per l'inferenza in corso...");
+        SetStatusAndLog($"[{SelectedProjectName}] Sincronizzazione modelli dal DB in corso...");
         var restoredModels = await _projectModelBlobService.RestoreAllBestOnnxToProjectAsync(SelectedProjectName);
-        SetStatusAndLog($"[{SelectedProjectName}] Struttura inferenza pronta: {restoredModels.Count} modelli ONNX ripristinati nelle directory di classe.");
+        var restoredPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var restoredModel in restoredModels)
+        {
+            restoredPaths[restoredModel.ClassName] = restoredModel.ModelPath;
+            SetStatusAndLog($"[{SelectedProjectName}] Modello DB aggiornato: classe={restoredModel.ClassName} hash={restoredModel.ContentHash[..Math.Min(12, restoredModel.ContentHash.Length)]} path={restoredModel.ModelPath}");
+        }
+
+        SetStatusAndLog($"[{SelectedProjectName}] Sincronizzazione inferenza completata: {restoredModels.Count} modelli ONNX ripristinati dal DB.");
+        return restoredPaths;
     }
 
     private YoloDetectionAttempt AnalyzeDetection(Bitmap bitmap, string modelPath, string labelName)
@@ -1323,7 +1901,65 @@ internal sealed class MainWindowViewModel : ViewModelBase
             .Where(d => string.Equals(d.Label, labelName, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(d => d.Confidence)
             .FirstOrDefault();
+
+        // Fallback robusto: quando labels.txt manca, il detector usa label "icon".
+        // In questo caso assumiamo modello single-class e prendiamo la detection migliore.
+        if (bestDetection is null && debugResult.Labels.Count == 0 && debugResult.Detections.Count > 0)
+        {
+            var fallback = debugResult.Detections
+                .OrderByDescending(d => d.Confidence)
+                .First();
+            bestDetection = new YoloDetection
+            {
+                Bounds = fallback.Bounds,
+                Confidence = fallback.Confidence,
+                ClassIndex = fallback.ClassIndex,
+                Label = labelName
+            };
+        }
+
         return new YoloDetectionAttempt(labelName, bestDetection, debugResult);
+    }
+
+    private static void EnsureRuntimeLabelFiles(string modelPath, string className)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath) || string.IsNullOrWhiteSpace(className))
+        {
+            return;
+        }
+
+        var normalizedClass = className.Trim();
+        var labelFileCandidates = new[]
+        {
+            Path.ChangeExtension(modelPath, ".labels.txt"),
+            Path.ChangeExtension(modelPath, ".txt")
+        };
+
+        foreach (var labelFile in labelFileCandidates)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(labelFile))
+                {
+                    continue;
+                }
+
+                var dir = Path.GetDirectoryName(labelFile);
+                if (!string.IsNullOrWhiteSpace(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                if (!File.Exists(labelFile) || string.IsNullOrWhiteSpace(File.ReadAllText(labelFile)))
+                {
+                    File.WriteAllText(labelFile, normalizedClass + Environment.NewLine);
+                }
+            }
+            catch
+            {
+                // Non bloccare il workflow: il fallback detection gestisce anche labels mancanti.
+            }
+        }
     }
 
     private async Task<byte[]> WaitForImageChangeAsync(string deviceSerial, byte[] baselineBytes, CancellationToken cancellationToken)
@@ -1410,14 +2046,16 @@ internal sealed record ChatOcrResult(
     string Reason,
     IReadOnlyList<string> Lines,
     bool ForceStopWorkflow,
-    bool MarkInvitaAndContinue = false);
+    bool MarkInvitaAndContinue = false,
+    bool MarkExcludeAndContinue = false);
 
 internal enum OcrFailureAction
 {
     Continue,
     StopCurrentContact,
     StopWorkflow,
-    MarkInvitaAndContinue
+    MarkInvitaAndContinue,
+    MarkExcludeAndContinue
 }
 
 internal sealed class OcrWorkflowStopException(string message) : Exception(message);

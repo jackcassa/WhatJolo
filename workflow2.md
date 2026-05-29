@@ -34,7 +34,7 @@ Tutti i workflow contatti sono ordinati per `Id`.
 
 1. Avvio loop workflow.
 2. Ricostruzione struttura inferenza locale dal DB.
-3. Verifica modelli `best.onnx` per `cerca`, `chat`, `back`.
+3. Verifica modelli `best.onnx` per `cerca`, `chat`, `invio`, `back`.
 4. Avvio ADB e selezione primo device.
 5. Acquisizione screenshot iniziale.
 6. Step `cerca`:
@@ -46,13 +46,16 @@ Tutti i workflow contatti sono ordinati per `Id`.
 10. Se `chat` trovata:
     - tap su `chat`
     - attesa cambio schermata
-11. Step `back`:
+11. Invio comando ADB testo `ch`.
+12. Attesa cambio schermata.
+13. Step `invio` via YOLO + tap.
+14. Step `back`:
     - standard (`KEYCODE_BACK`) se flag attivo
     - altrimenti YOLO + tap
-12. Se il ciclo termina correttamente:
+15. Se il ciclo termina correttamente:
     - `sent = 1` sul contatto
-13. Pausa randomizzata tra `1` e `2` secondi, poi contatto successivo.
-14. Finita la lista, il workflow riparte dall'inizio.
+16. Pausa randomizzata tra `1` e `2` secondi, poi contatto successivo.
+17. Finita la lista, il workflow riparte dall'inizio.
 
 ## 3) Regola OCR (opzionale)
 
@@ -92,6 +95,7 @@ I due flag stop OCR sono esclusivi e disabilitati quando `OCR chat` e' `false`.
 Se una classe non viene trovata:
 - `cerca` -> salva in `Captures/cerca`
 - `chat` -> salva in `Captures/chat`
+- `invio` -> salva in `Captures/invio`
 - `back` -> salva in `Captures/back`
 
 Log unificato (video + file):

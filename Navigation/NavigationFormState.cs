@@ -19,6 +19,13 @@ internal sealed class NavigationFormState
 
     public bool AutoScrollWorkflowLog { get; set; } = true;
 
+    public string? SendListMode { get; set; }
+
+    public bool UsePasteAfterChat { get; set; } = true;
+
+    public bool UseDoubleBack { get; set; }
+
+
     public static NavigationFormState Load(string path)
     {
         try

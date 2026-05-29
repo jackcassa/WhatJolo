@@ -1132,6 +1132,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private YoloTrainingProfile? _selectedYoloTrainingProfile;
     private readonly YoloTrainingService _yoloTrainingService;
     private CancellationTokenSource? _yoloTrainingCancellationTokenSource;
+    private int? _currentYoloProcessId;
     private DataView? _databaseRowsView;
     private string _databaseTableStatus;
     private string? _selectedDatabaseTable;
@@ -1506,6 +1507,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             SelectedProjectName = snapshot.SelectedProjectName;
             return;
         }
+    }
+
+    public int? CurrentYoloProcessId
+    {
+        get => _currentYoloProcessId;
+        private set => SetField(ref _currentYoloProcessId, value);
     }
 
     public async Task CreateOrSelectProjectAsync(string projectName)
@@ -2157,17 +2164,31 @@ public sealed class MainWindowViewModel : ViewModelBase
         Action<string>? onFailed = null)
     {
         var trainingClass = SelectedCropClass.Trim().ToLowerInvariant();
-        var datasetPath = _workspaceService.GetYoloDatasetPath(SelectedProjectName, trainingClass);
-        var dataYamlPath = Path.Combine(datasetPath, "data.yaml");
-        if (!File.Exists(dataYamlPath))
+        string datasetPath;
+        string dataYamlPath;
+
+        try
         {
-            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Dataset YOLO non trovato. Crea prima il dataset.");
-            YoloStatusText = "Dataset non pronto";
-            onFailed?.Invoke("Dataset non pronto.");
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Preparazione dataset YOLO automatica in corso...");
+            datasetPath = await CreateDatasetStructureAsync();
+            dataYamlPath = Path.Combine(datasetPath, "data.yaml");
+            if (!File.Exists(dataYamlPath))
+            {
+                throw new FileNotFoundException($"data.yaml non trovato dopo la preparazione dataset: {dataYamlPath}");
+            }
+
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Dataset pronto: {datasetPath}");
+        }
+        catch (Exception ex)
+        {
+            YoloStatusText = "Preparazione dataset fallita";
+            AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Errore preparazione dataset: {ex.Message}");
+            onFailed?.Invoke($"Preparazione dataset fallita: {ex.Message}");
             return;
         }
 
         YoloEpochInfo = "Epoca corrente: avvio...";
+        CurrentYoloProcessId = null;
         var trainingProfile = SelectedYoloTrainingProfile ?? new YoloTrainingProfile
         {
             Name = "Medio",
@@ -2181,6 +2202,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         var progress = new Progress<YoloTrainingProgress>(progressUpdate =>
         {
+            if (TryExtractYoloPid(progressUpdate.RawLine, out var pid))
+            {
+                CurrentYoloProcessId = pid;
+                AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Processo YOLO attivo con PID={pid}.");
+            }
+
             if (progressUpdate.CurrentEpoch.HasValue && progressUpdate.TotalEpochs.HasValue)
             {
                 YoloEpochInfo = $"Epoca corrente: {progressUpdate.CurrentEpoch.Value}/{progressUpdate.TotalEpochs.Value}";
@@ -2219,13 +2246,28 @@ public sealed class MainWindowViewModel : ViewModelBase
             YoloStatusText = string.IsNullOrWhiteSpace(result.OnnxModelPath)
                 ? $"Training completato: {result.RunFolder}"
                 : $"Training completato: {result.OnnxModelPath}";
+            AdbCaptureTab.SetStatusMessage(
+                string.IsNullOrWhiteSpace(result.OnnxModelPath)
+                ? $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.RunFolder} | Log: {result.TrainLogPath}"
+                : $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.OnnxModelPath} | Log: {result.TrainLogPath}");
+
+            try
+            {
+                var saveResult = await SaveBestOnnxToDatabaseAsync();
                 AdbCaptureTab.SetStatusMessage(
-                    string.IsNullOrWhiteSpace(result.OnnxModelPath)
-                    ? $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.RunFolder} | Log: {result.TrainLogPath}"
-                    : $"[{SelectedProjectName}/{trainingClass}] Training YOLO completato: {result.OnnxModelPath} | Log: {result.TrainLogPath}");
+                    $"[{saveResult.ProjectName}/{saveResult.ClassName}] best.onnx salvato nel DB automaticamente: {saveResult.ByteLength:N0} byte -> {saveResult.CompressedLength:N0} byte compressi.");
+            }
+            catch (Exception ex)
+            {
+                YoloStatusText = $"Training completato, ma salvataggio DB fallito: {ex.Message}";
+                AdbCaptureTab.SetStatusMessage($"[{SelectedProjectName}/{trainingClass}] Training completato ma salvataggio best.onnx nel DB fallito: {ex.Message}");
+                onFailed?.Invoke($"Training completato ma salvataggio DB fallito: {ex.Message}");
+                return;
+            }
+
             onCompleted?.Invoke(string.IsNullOrWhiteSpace(result.OnnxModelPath)
-                ? $"Run: {result.RunFolder}"
-                : $"ONNX: {result.OnnxModelPath}");
+                ? $"Run: {result.RunFolder} | best.onnx salvato nel DB"
+                : $"ONNX: {result.OnnxModelPath} | best.onnx salvato nel DB");
         }
         catch (Exception ex)
         {
@@ -2237,6 +2279,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             _yoloTrainingCancellationTokenSource?.Dispose();
             _yoloTrainingCancellationTokenSource = null;
+            CurrentYoloProcessId = null;
         }
     }
 
@@ -2245,10 +2288,61 @@ public sealed class MainWindowViewModel : ViewModelBase
         try
         {
             _yoloTrainingCancellationTokenSource?.Cancel();
+            ForceStopCurrentYoloProcess();
         }
         catch
         {
         }
+    }
+
+    public void ForceStopCurrentYoloProcess()
+    {
+        try
+        {
+            if (!CurrentYoloProcessId.HasValue)
+            {
+                return;
+            }
+
+            var process = Process.GetProcessById(CurrentYoloProcessId.Value);
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // Best effort: il processo potrebbe essere già terminato.
+        }
+        finally
+        {
+            CurrentYoloProcessId = null;
+        }
+    }
+
+    private static bool TryExtractYoloPid(string rawLine, out int pid)
+    {
+        pid = 0;
+        if (string.IsNullOrWhiteSpace(rawLine))
+        {
+            return false;
+        }
+
+        const string marker = "PID=";
+        var markerIndex = rawLine.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var start = markerIndex + marker.Length;
+        var end = start;
+        while (end < rawLine.Length && char.IsDigit(rawLine[end]))
+        {
+            end++;
+        }
+
+        return end > start && int.TryParse(rawLine[start..end], out pid);
     }
 
     private void ApplyProjectClasses(string projectName)

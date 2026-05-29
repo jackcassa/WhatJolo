@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace WhatJolo;
 
@@ -125,6 +128,202 @@ public sealed class AdbService
         EnsureSuccess(result, "adb shell input keyevent");
     }
 
+    public async Task<string> DumpUiHierarchyXmlAsync(string deviceSerial, string remotePath = "/sdcard/window_dump.xml")
+    {
+        if (string.IsNullOrWhiteSpace(deviceSerial))
+        {
+            throw new InvalidOperationException("Nessun device ADB selezionato.");
+        }
+
+        if (string.IsNullOrWhiteSpace(remotePath))
+        {
+            remotePath = "/sdcard/window_dump.xml";
+        }
+
+        var dumpResult = await RunAdbAsync($"-s {deviceSerial} shell uiautomator dump {remotePath}");
+        EnsureSuccess(dumpResult, "adb shell uiautomator dump");
+
+        var readResult = await RunAdbAsync($"-s {deviceSerial} shell cat {remotePath}");
+        EnsureSuccess(readResult, "adb shell cat window_dump.xml");
+        return readResult.StandardOutput;
+    }
+
+    public async Task<bool> HasNoSearchResultsAsync(string deviceSerial)
+    {
+        var xml = await DumpUiHierarchyXmlAsync(deviceSerial);
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return false;
+        }
+
+        return ContainsNodeByTextOrResourceId(
+            xml,
+            "Nessun risultato trovato",
+            "com.whatsapp.w4b:id/search_no_matches");
+    }
+
+    public bool ContainsNodeByTextOrResourceId(string xml, string text, string resourceId)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            return false;
+        }
+
+        var normalizedText = (text ?? string.Empty).Trim();
+        var normalizedResourceId = (resourceId ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalizedText) && string.IsNullOrWhiteSpace(normalizedResourceId))
+        {
+            return false;
+        }
+
+        foreach (var node in EnumerateUiNodes(xml))
+        {
+            if (!string.IsNullOrWhiteSpace(normalizedText) &&
+                string.Equals(node.Text, normalizedText, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(normalizedResourceId) &&
+                string.Equals(node.ResourceId, normalizedResourceId, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool HasAnyNodeByResourceId(string xml, params string[] resourceIds)
+    {
+        if (string.IsNullOrWhiteSpace(xml) || resourceIds is null || resourceIds.Length == 0)
+        {
+            return false;
+        }
+
+        var normalized = new HashSet<string>(
+            resourceIds
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+        if (normalized.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var node in EnumerateUiNodes(xml))
+        {
+            if (normalized.Contains(node.ResourceId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool TryFindNodeByContentDesc(string xml, string contentDesc, out AdbUiNode node)
+    {
+        var normalizedContentDesc = (contentDesc ?? string.Empty).Trim();
+        foreach (var currentNode in EnumerateUiNodes(xml))
+        {
+            if (string.Equals(currentNode.ContentDescription, normalizedContentDesc, StringComparison.OrdinalIgnoreCase))
+            {
+                node = currentNode;
+                return true;
+            }
+        }
+
+        node = default;
+        return false;
+    }
+
+    public bool TryFindNodeByResourceId(string xml, string resourceId, out AdbUiNode node)
+    {
+        var normalizedResourceId = (resourceId ?? string.Empty).Trim();
+        foreach (var currentNode in EnumerateUiNodes(xml))
+        {
+            if (string.Equals(currentNode.ResourceId, normalizedResourceId, StringComparison.OrdinalIgnoreCase))
+            {
+                node = currentNode;
+                return true;
+            }
+        }
+
+        node = default;
+        return false;
+    }
+
+    public (int X, int Y) GetNodeCenter(AdbUiNode node)
+    {
+        var x = (int)Math.Round((node.Left + node.Right) / 2.0, MidpointRounding.AwayFromZero);
+        var y = (int)Math.Round((node.Top + node.Bottom) / 2.0, MidpointRounding.AwayFromZero);
+        return (x, y);
+    }
+
+    private static IEnumerable<AdbUiNode> EnumerateUiNodes(string xml)
+    {
+        if (string.IsNullOrWhiteSpace(xml))
+        {
+            yield break;
+        }
+
+        XDocument document;
+        try
+        {
+            document = XDocument.Parse(xml);
+        }
+        catch
+        {
+            yield break;
+        }
+
+        foreach (var element in document.Descendants("node"))
+        {
+            var boundsText = (string?)element.Attribute("bounds") ?? string.Empty;
+            if (!TryParseBounds(boundsText, out var left, out var top, out var right, out var bottom))
+            {
+                continue;
+            }
+
+            yield return new AdbUiNode(
+                (string?)element.Attribute("text") ?? string.Empty,
+                (string?)element.Attribute("content-desc") ?? string.Empty,
+                (string?)element.Attribute("resource-id") ?? string.Empty,
+                (string?)element.Attribute("class") ?? string.Empty,
+                left,
+                top,
+                right,
+                bottom,
+                ParseBooleanAttribute(element, "clickable"),
+                ParseBooleanAttribute(element, "focused"));
+        }
+    }
+
+    private static bool ParseBooleanAttribute(XElement element, string name)
+    {
+        var value = ((string?)element.Attribute(name) ?? string.Empty).Trim();
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParseBounds(string boundsText, out int left, out int top, out int right, out int bottom)
+    {
+        left = 0;
+        top = 0;
+        right = 0;
+        bottom = 0;
+        var match = Regex.Match(boundsText, @"\[(\d+),(\d+)\]\[(\d+),(\d+)\]");
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        return int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out left) &&
+               int.TryParse(match.Groups[2].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out top) &&
+               int.TryParse(match.Groups[3].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out right) &&
+               int.TryParse(match.Groups[4].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out bottom);
+    }
+
     private async Task<AdbCommandResult> RunAdbAsync(string arguments)
     {
         var startInfo = new ProcessStartInfo
@@ -165,3 +364,15 @@ public sealed class AdbService
 
     private sealed record AdbCommandResult(int ExitCode, string StandardOutput, string StandardError);
 }
+
+public readonly record struct AdbUiNode(
+    string Text,
+    string ContentDescription,
+    string ResourceId,
+    string ClassName,
+    int Left,
+    int Top,
+    int Right,
+    int Bottom,
+    bool Clickable,
+    bool Focused);

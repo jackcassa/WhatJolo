@@ -5,7 +5,12 @@
     <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\app-icon.ico</ApplicationIcon>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\app-icon.ico" />
+    <Resource Include="Assets\app-icon.png" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\WhatJolo.Shared\WhatJolo.Shared.csproj" />
     <ProjectReference Include="..\WhatJolo.WindowsOcr\WhatJolo.WindowsOcr.csproj" />

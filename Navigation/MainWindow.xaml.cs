@@ -32,32 +32,7 @@ public partial class MainWindow : Window
 
     private async void Send_Click(object sender, RoutedEventArgs e)
     {
-        await _viewModel.StartSendLoopAsync();
-    }
-
-    private async void Send2_Click(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.StartSend2MigrationLoopAsync();
-    }
-
-    private async void Send3_Click(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.StartSend3AgendaLoopAsync();
-    }
-
-    private async void Send4_Click(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.StartSend4AllLoopAsync();
-    }
-
-    private async void Send5_Click(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.StartSend5AgendaOnlyLoopAsync();
-    }
-
-    private async void Send6_Click(object sender, RoutedEventArgs e)
-    {
-        await _viewModel.StartSend6OcrLoopAsync();
+        await _viewModel.StartSelectedSendLoopAsync();
     }
 
     private void Stop_Click(object sender, RoutedEventArgs e)
@@ -107,6 +82,53 @@ public partial class MainWindow : Window
                 this,
                 $"Reset sent non riuscito:{Environment.NewLine}{ex.Message}",
                 "Errore reset sent",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private async void ResetExclude_Click(object sender, RoutedEventArgs e)
+    {
+        var firstConfirmation = MessageBox.Show(
+            this,
+            "Confermi di voler azzerare il flag exclude per tutti i contatti?",
+            "Conferma reset exclude",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (firstConfirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        var secondConfirmation = MessageBox.Show(
+            this,
+            "Ultima conferma: questa operazione e' globale. Vuoi continuare?",
+            "Conferma finale reset exclude",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No);
+        if (secondConfirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            await _viewModel.ResetExcludeAsync();
+            MessageBox.Show(
+                this,
+                "Il flag exclude e' stato azzerato per tutti i contatti.",
+                "Reset exclude completato",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"Reset exclude non riuscito:{Environment.NewLine}{ex.Message}",
+                "Errore reset exclude",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
         }
